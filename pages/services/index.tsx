@@ -21,7 +21,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
 
   return {
     props: {
-      services: services.map((s) => ({
+      services: services.map((s:any) => ({
         id: s.id,
         name: s.name,
         // ✅ 用 durationMinutes，和 schema 对齐
