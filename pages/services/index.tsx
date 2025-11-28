@@ -1,56 +1,57 @@
-import React, { useState } from 'react';
-import { useRouter } from 'next/router';
-import prisma from '../../lib/prisma';
-import type { GetServerSideProps } from 'next';
+import React, { useState } from 'react'
+import { useRouter } from 'next/router'
+import type { GetServerSideProps } from 'next'
+import prisma from '../../lib/prisma'
 
 type Service = {
-  id: number;
-  name: string;
-  duration: number;
-  price: number;
-};
+  id: number
+  name: string
+  durationMinutes: number
+  price: number
+}
 
 type PageProps = {
-  services: Service[];
-};
+  services: Service[]
+}
 
 export const getServerSideProps: GetServerSideProps<PageProps> = async () => {
   const services = await prisma.service.findMany({
     orderBy: { id: 'asc' },
-  });
+  })
 
   return {
     props: {
       services: services.map((s) => ({
         id: s.id,
         name: s.name,
-        duration: s.duration,
+        // ✅ 用 durationMinutes，和 schema 对齐
+        durationMinutes: s.durationMinutes,
         price: s.price,
       })),
     },
-  };
-};
+  }
+}
 
 export default function ServicesPage({ services }: PageProps) {
-  const router = useRouter();
+  const router = useRouter()
 
-  const [name, setName] = useState('');
-  const [duration, setDuration] = useState('');
-  const [price, setPrice] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const [name, setName] = useState('')
+  const [durationMinutes, setDuration] = useState('')
+  const [price, setPrice] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMessage(null);
+    e.preventDefault()
+    setMessage(null)
 
-    if (!name || !duration || !price) {
-      setMessage('项目名、时长、价格都要填');
-      return;
+    if (!name || !durationMinutes || !price) {
+      setMessage('项目名、时长、价格都要填')
+      return
     }
 
     try {
-      setLoading(true);
+      setLoading(true)
       const res = await fetch('/api/services/create', {
         method: 'POST',
         headers: {
@@ -58,32 +59,31 @@ export default function ServicesPage({ services }: PageProps) {
         },
         body: JSON.stringify({
           name,
-          duration: Number(duration),
+          duration: Number(durationMinutes),
           price: Number(price),
         }),
-      });
+      })
 
-      const data = await res.json();
+      const data = await res.json()
 
       if (!res.ok || !data.success) {
-        setMessage(data.message || '创建失败，请稍后重试');
-        return;
+        setMessage(data.message || '创建失败，请稍后重试')
+        return
       }
 
-      setMessage('创建成功！');
-      setName('');
-      setDuration('');
-      setPrice('');
+      setMessage('创建成功！')
+      setName('')
+      setDuration('')
+      setPrice('')
 
-      // 刷新列表
-      router.replace(router.asPath);
+      router.replace(router.asPath)
     } catch (error) {
-      console.error(error);
-      setMessage('网络异常，请稍后再试');
+      console.error(error)
+      setMessage('网络异常，请稍后再试')
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  };
+  }
 
   return (
     <main className="min-h-screen bg-gray-100 flex justify-center py-10">
@@ -105,7 +105,7 @@ export default function ServicesPage({ services }: PageProps) {
                 <div>
                   <div className="font-medium text-sm">{s.name}</div>
                   <div className="text-xs text-gray-500 mt-1">
-                    时长：{s.duration} 分钟 · 价格：￥{s.price}
+                    时长：{s.durationMinutes} 分钟 · 价格：￥{s.price}
                   </div>
                 </div>
                 <span className="text-xs text-gray-400">ID: {s.id}</span>
@@ -136,7 +136,7 @@ export default function ServicesPage({ services }: PageProps) {
               </label>
               <input
                 className="w-full border rounded px-3 py-2 text-sm"
-                value={duration}
+                value={durationMinutes}
                 onChange={(e) => setDuration(e.target.value)}
                 placeholder="例如：45"
                 type="number"
@@ -168,12 +168,10 @@ export default function ServicesPage({ services }: PageProps) {
           </form>
 
           {message && (
-            <p className="mt-3 text-xs text-center text-gray-700">
-              {message}
-            </p>
+            <p className="mt-3 text-xs text-center text-gray-700">{message}</p>
           )}
         </div>
       </div>
     </main>
-  );
+  )
 }

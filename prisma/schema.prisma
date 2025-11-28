@@ -81,7 +81,7 @@ model Booking {
 
   // 订单来源：miniapp / web / admin 等（现在你前端已经在传了，先占位）
   source    String?
-  price     Int                 // ✅ 新增：下单时的价格（单位：和 Service.price 一样，80 就是 80 元）
+  price     Int？                 // ✅ 新增：下单时的价格（单位：和 Service.price 一样，80 就是 80 元）
 
   // 支付信息（以后接微信支付时用）
   payStatus   String   @default("unpaid")  // unpaid / paid / refunded

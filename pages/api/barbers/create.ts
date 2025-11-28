@@ -25,7 +25,7 @@ export default async function handler(
   }
 
   try {
-    const { name, level, shopId } = req.body;
+    const { name, shopId } = req.body;
 
     // 1. 校验必填字段
     if (!name || !shopId) {
@@ -45,13 +45,15 @@ export default async function handler(
     }
 
     // 2. 写入数据库（根据你的 schema.prisma 里的 model Barber）
-    const barber = await prisma.barber.create({
-      data: {
-        name,
-        level: level || null,
-        shopId: shopIdNumber,
-      },
-    });
+const barber = await prisma.barber.create({
+  data: {
+    name,
+    shopId: shopIdNumber,
+    workStartHour: 10, // 默认早上 10 点上班
+    workEndHour: 21,   // 默认晚上 21 点下班
+  },
+})
+
 
     // 3. 返回创建好的数据
     return res.status(201).json({

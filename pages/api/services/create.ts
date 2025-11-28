@@ -45,10 +45,11 @@ export default async function handler(
 
     const service = await prisma.service.create({
       data: {
-        name,
-        duration: durationNum,
-        price: priceNum,
-      },
+  name,
+  durationMinutes: durationNum, // ✅ 对应 schema 里的字段名
+  price: priceNum,
+},
+
     });
 
     return res.status(201).json({
