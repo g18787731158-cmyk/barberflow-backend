@@ -1,3 +1,4 @@
+// pages/api/bookings/create.ts
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
 
@@ -7,116 +8,78 @@ type Data =
 
 export default async function handler(
   req: NextApiRequest,
-  res: NextApiResponse<Data>
+  res: NextApiResponse<Data>,
 ) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', 'POST');
+    res.setHeader('Allow', ['POST']);
     return res
       .status(405)
-      .json({ success: false, message: `Method ${req.method} Not Allowed` });
+      .json({ success: false, message: 'Method Not Allowed' });
   }
 
   try {
     const {
+      userName,
+      phone,
       shopId,
       barberId,
       serviceId,
-      date,
-      time,
-      userName,
-      phone,
-    } = req.body as {
-      shopId?: string | number;
-      barberId?: string | number;
-      serviceId?: string | number;
-      date?: string;
-      time?: string;
-      userName?: string;
-      phone?: string;
-    };
+      date, // YYYY-MM-DD
+      time, // HH:mm
+    } = req.body;
 
     // 1. 基本校验
-    if (
-      !shopId ||
-      !barberId ||
-      !serviceId ||
-      !date ||
-      !time ||
-      !userName
-    ) {
+    if (!userName || !shopId || !barberId || !serviceId || !date || !time) {
       return res.status(400).json({
         success: false,
-        message: '门店、理发师、项目、日期、时间、客户姓名都是必填的',
+        message: '门店、理发师、服务、姓名、日期、时间都要填',
       });
     }
 
-    const shopIdNum = Number(shopId);
-    const barberIdNum = Number(barberId);
-    const serviceIdNum = Number(serviceId);
-
-    if (
-      Number.isNaN(shopIdNum) ||
-      Number.isNaN(barberIdNum) ||
-      Number.isNaN(serviceIdNum)
-    ) {
-      return res.status(400).json({
-        success: false,
-        message: '门店 / 理发师 / 项目 ID 无效',
-      });
-    }
-
-    // 2. 解析日期时间
-    const isoString = `${date}T${time}:00`;
-    const startTime = new Date(isoString);
-
+    // 2. 拼出开始时间（这里简单拼接，够用）
+    const startTimeStr = `${date}T${time}:00`;
+    const startTime = new Date(startTimeStr);
     if (Number.isNaN(startTime.getTime())) {
       return res.status(400).json({
         success: false,
-        message: '日期或时间格式不正确',
+        message: '预约时间不合法',
       });
     }
 
-    // 3. 可选：检查关联是否存在
-    const [shop, barber, service] = await Promise.all([
-      prisma.shop.findUnique({ where: { id: shopIdNum } }),
-      prisma.barber.findUnique({ where: { id: barberIdNum } }),
-      prisma.service.findUnique({ where: { id: serviceIdNum } }),
-    ]);
+    // 3. 查服务价格 —— 为了给 Booking.price 字段赋值
+    const service = await prisma.service.findUnique({
+      where: { id: Number(serviceId) },
+      select: { price: true },
+    });
 
-    if (!shop) {
-      return res
-        .status(400)
-        .json({ success: false, message: '门店不存在' });
-    }
-    if (!barber) {
-      return res
-        .status(400)
-        .json({ success: false, message: '理发师不存在' });
-    }
     if (!service) {
-      return res
-        .status(400)
-        .json({ success: false, message: '服务项目不存在' });
+      return res.status(400).json({
+        success: false,
+        message: '所选服务不存在',
+      });
     }
 
-    // 4. 写入数据库（注意 status: 'scheduled'）
+    // 4. 写入数据库（注意：一定要带上 price）
     const booking = await prisma.booking.create({
       data: {
         userName,
         phone: phone || null,
-        shopId: shopIdNum,
-        barberId: barberIdNum,
-        serviceId: serviceIdNum,
+        shopId: Number(shopId),
+        barberId: Number(barberId),
+        serviceId: Number(serviceId),
         startTime,
-        status: 'scheduled', // 新建预约默认「待服务」
+        status: 'scheduled',
+        source: 'admin', // 后台创建的订单，标记一下来源
+        price: service.price, // ⭐ 关键：给必填字段 price 赋值
       },
     });
 
     return res.status(200).json({ success: true, booking });
   } catch (err) {
-    console.error('Error creating booking:', err);
-    return res
-      .status(500)
-      .json({ success: false, message: 'Internal server error' });
+    console.error('Admin create booking error:', err);
+    return res.status(500).json({
+      success: false,
+      message: '服务器异常，请稍后再试',
+    });
   }
 }
