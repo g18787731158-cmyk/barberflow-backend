@@ -46,7 +46,7 @@ export const getServerSideProps: GetServerSideProps<PageProps> = async (ctx) => 
       shop: {
         id: shop.id,
         name: shop.name,
-        barbers: shop.barbers.map((b) => ({
+        barbers: shop.barbers.map((b:any) => ({
           id: b.id,
           name: b.name,
           // 现在数据库里没有 level 字段，先全部给 null，前端类型就不会报错
