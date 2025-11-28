@@ -3,9 +3,10 @@ generator client {
 }
 
 datasource db {
-  provider          = "mysql"
-  url               = env("DATABASE_URL")
-  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+  // shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
+  // 👉 先把 shadowDatabaseUrl 关掉，方便本地 & Vercel 生成 Prisma Client
 }
 
 model Shop {
@@ -13,28 +14,17 @@ model Shop {
   name    String
   address String?
 
-  createdAt DateTime @default(now())   // ✅ 新增
-  updatedAt DateTime @updatedAt        // ✅ 新增
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-   // ==== 计费 / 抽成相关基础配置（以后用，现在默认全关闭） ====
+  billingBaseMode   String @default("none")
+  billingBaseValue  Int    @default(0)
+  billingExtraMode  String @default("none")
+  billingExtraValue Int    @default(0)
 
-  // 基础功能收费模式: none / monthly / yearly / percent
-  billingBaseMode   String   @default("none")
-  // 基础功能收费值:
-  // - 如果是 monthly/yearly = 金额（单位：分）
-  // - 如果是 percent       = 比例基数，例如 500 = 5.00%
-  billingBaseValue  Int      @default(0)
-
-  // 增值功能收费模式: none / percent / mixed 等（暂时不用，先占坑）
-  billingExtraMode  String   @default("none")
-  billingExtraValue Int      @default(0)
-
-  // 微信分账相关：平台与门店与理发师的分润基数（例如 500 = 5.00%）
-  platformShareBasis Int     @default(0)
-  shopShareBasis     Int     @default(0)
-  barberShareBasis   Int     @default(0)
-
-  // 是否为该门店启用自动分账（以后接微信分账时用）
+  platformShareBasis Int   @default(0)
+  shopShareBasis     Int   @default(0)
+  barberShareBasis   Int   @default(0)
   enableAutoSplit    Boolean @default(false)
 
   barbers  Barber[]
@@ -45,11 +35,11 @@ model Barber {
   id            Int    @id @default(autoincrement())
   name          String
   shopId        Int
-  workStartHour Int    // 上班开始小时，比如 10
-  workEndHour   Int    // 下班结束小时，比如 18
+  workStartHour Int
+  workEndHour   Int
 
-  createdAt DateTime @default(now())   // ✅ 新增
-  updatedAt DateTime @updatedAt        // ✅ 新增
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   shop     Shop     @relation(fields: [shopId], references: [id])
   bookings Booking[]
@@ -58,52 +48,45 @@ model Barber {
 model Service {
   id              Int    @id @default(autoincrement())
   name            String
-  durationMinutes Int    // 时长（分钟），例：60
-  price           Int    // 价格，例：80
+  durationMinutes Int
+  price           Int
 
-  createdAt DateTime @default(now())   // ✅ 新增
-  updatedAt DateTime @updatedAt        // ✅ 新增
-  
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
   bookings Booking[]
 }
 
 model Booking {
   id        Int      @id @default(autoincrement())
+  userName  String
+  phone     String?
+  shopId    Int
+  barberId  Int
+  serviceId Int
+  startTime DateTime
+  status    String   @default("scheduled")
 
-  // 基本信息
-  userName  String              // 客户姓名
-  phone     String?             // 客户电话，可为空
-  shopId    Int                 // 门店
-  barberId  Int                 // 理发师
-  serviceId Int                 // 服务项目
-  startTime DateTime            // 开始时间
-  status    String   @default("scheduled") // 预约状态: scheduled/completed/cancelled
-
-  // 订单来源：miniapp / web / admin 等（现在你前端已经在传了，先占位）
   source    String?
-  price     Int？                 // ✅ 新增：下单时的价格（单位：和 Service.price 一样，80 就是 80 元）
+  price     Int      // 下单时的价格（和 Service.price 一样的单位）
 
-  // 支付信息（以后接微信支付时用）
-  payStatus   String   @default("unpaid")  // unpaid / paid / refunded
-  payAmount   Int      @default(0)         // 实际支付金额（单位：分）
-  payOrderNo  String?                       // 微信支付订单号
-  payTime     DateTime?                     // 支付时间
+  payStatus  String   @default("unpaid")
+  payAmount  Int      @default(0)
+  payOrderNo String?
+  payTime    DateTime?
 
-  // 分账信息（以后接微信分账时用）
-  splitStatus  String   @default("pending") // pending / success / failed / partial
-  splitDetail  String?                      // JSON，记录分账明细（给谁多少）
+  splitStatus String  @default("pending")
+  splitDetail String?
 
-  createdAt DateTime @default(now())  // 创建时间
-  updatedAt DateTime @updatedAt       // 最后更新时间
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   shop    Shop    @relation(fields: [shopId], references: [id])
   barber  Barber  @relation(fields: [barberId], references: [id])
   service Service @relation(fields: [serviceId], references: [id])
 
-  // 一个理发师同一时间只能有一条预约，避免撞单
   @@unique([barberId, startTime])
 
-  // 常用查询索引
   @@index([shopId])
   @@index([barberId])
   @@index([serviceId])
