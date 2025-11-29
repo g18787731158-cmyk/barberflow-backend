@@ -1,4 +1,5 @@
-// app/api/bookings/route.ts  （或者 src/app/api/bookings/route.ts）
+// app/api/bookings/route.ts
+// 或 src/app/api/bookings/route.ts
 
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest) {
       source,
     } = body
 
+    // 基础校验
     if (!shopId || !barberId || !serviceId || !userName || !phone || !startTime) {
       return NextResponse.json(
         { error: '缺少必要字段' },
@@ -68,15 +70,20 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // 把 startTime 转成 Date，看是否合法
     const start = new Date(startTime)
+    if (isNaN(start.getTime())) {
+      return NextResponse.json(
+        { error: `startTime 格式不正确: ${startTime}` },
+        { status: 400 }
+      )
+    }
 
-    // 检查是否存在同一理发师、同一时间的未取消预约
+    // 检查是否存在同一理发师、同一时间的预约（简单防冲突）
     const conflict = await prisma.booking.findFirst({
       where: {
         barberId: Number(barberId),
         startTime: start,
-        // 根据你的 schema 调整，这里假设 status 有 PENDING / CONFIRMED / CANCELLED
-        status: { not: 'CANCELLED' },
       },
     })
 
@@ -87,6 +94,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // 创建预约
     const booking = await prisma.booking.create({
       data: {
         shopId: Number(shopId),
@@ -96,16 +104,17 @@ export async function POST(req: NextRequest) {
         phone,
         startTime: start,
         source: source || 'miniapp',
-        // 如果你的 schema 有默认 status，就可以不写 status，这里给个兜底
-        status: 'PENDING',
+        // 如果你的 Booking 表有 status 且有默认值，就让它用默认值即可
       },
     })
 
     return NextResponse.json(booking, { status: 201 })
-  } catch (error) {
+  } catch (error: any) {
     console.error('POST /api/bookings error', error)
     return NextResponse.json(
-      { error: '服务器错误，请稍后再试' },
+      {
+        error: error?.message || '服务器错误，请稍后再试',
+      },
       { status: 500 }
     )
   }
