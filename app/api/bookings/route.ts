@@ -1,13 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { prisma } from '@/lib/prisma'
+import prisma from '@/lib/prisma'   // ✅ 用默认导入
 
-// GET /api/bookings?date=2025-11-30&shopId=1&barberId=1
+// GET /api/bookings?date=2025-11-30&shopId=1&barberId=1&phone=189xxxx
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const date = searchParams.get('date')
     const shopId = searchParams.get('shopId')
     const barberId = searchParams.get('barberId')
+    const phone = searchParams.get('phone')
 
     const where: any = {}
 
@@ -19,6 +20,7 @@ export async function GET(req: NextRequest) {
 
     if (shopId) where.shopId = Number(shopId)
     if (barberId) where.barberId = Number(barberId)
+    if (phone) where.phone = phone
 
     const bookings = await prisma.booking.findMany({
       where,
@@ -30,11 +32,18 @@ export async function GET(req: NextRequest) {
       },
     })
 
-    return NextResponse.json({ bookings }, { status: 200 })
+    return NextResponse.json(
+      { success: true, bookings },
+      { status: 200 }
+    )
   } catch (error) {
     console.error('GET /api/bookings error', error)
     return NextResponse.json(
-      { success: false, message: 'GET 服务器错误', error: String(error) },
+      {
+        success: false,
+        message: 'GET 服务器错误',
+        error: String(error),
+      },
       { status: 500 }
     )
   }
@@ -44,9 +53,9 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { shopId, barberId, serviceId, userName, phone, startTime, source } = body
+    const { shopId, barberId, serviceId, userName, phone, startTime, source } =
+      body
 
-    // 基础校验
     if (!shopId || !barberId || !serviceId || !userName || !phone || !startTime) {
       return NextResponse.json(
         { success: false, message: '缺少必要字段' },
@@ -54,7 +63,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 把 startTime 转成 Date，看是否合法
     const start = new Date(startTime)
     if (isNaN(start.getTime())) {
       return NextResponse.json(
@@ -66,7 +74,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 检查是否存在同一理发师、同一时间的预约（简单防冲突）
+    // 简单防冲突：同一理发师 + 同一时间
     const conflict = await prisma.booking.findFirst({
       where: {
         barberId: Number(barberId),
@@ -84,7 +92,6 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 创建预约
     const booking = await prisma.booking.create({
       data: {
         shopId: Number(shopId),
@@ -107,7 +114,6 @@ export async function POST(req: NextRequest) {
       {
         success: false,
         message: '服务器开小差了，请稍后再试',
-        // 下面这几个字段就是为了给我们看清楚到底哪儿炸了
         error: String(error),
         code: (error && error.code) || null,
         meta: (error && error.meta) || null,
