@@ -68,7 +68,7 @@ model Booking {
   status    String   @default("scheduled")
 
   source    String?
-  price     Int      // 下单时的价格（和 Service.price 一样的单位）
+  price      Int?     // 你也可以写 Int @default(0) 看你想不想强制有值
 
   payStatus  String   @default("unpaid")
   payAmount  Int      @default(0)
