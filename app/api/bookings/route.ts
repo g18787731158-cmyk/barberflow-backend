@@ -1,155 +1,119 @@
-import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+// app/api/bookings/route.ts
 
-// GET /api/bookings
-// 用于：
-// 1）小程序「我的预约」：根据 phone 查询
-export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url)
-  const phone = searchParams.get('phone')
+import { NextRequest, NextResponse } from 'next/server';
+import prisma from '../../../lib/prisma'; // 相对路径这样写是没问题的
 
-  if (!phone) {
-    return NextResponse.json(
-      { error: '缺少手机号 phone' },
-      { status: 400 },
-    )
-  }
-
-  try {
-    const bookings = await prisma.booking.findMany({
-      where: {
-        phone,
-      },
-      orderBy: {
-        startTime: 'asc',
-      },
-      include: {
-        shop: true,
-        barber: true,
-        service: true,
-      },
-    })
-
-    return NextResponse.json({ bookings })
-  } catch (error) {
-    console.error('GET /api/bookings error:', error)
-    return NextResponse.json(
-      { error: '获取预约失败' },
-      { status: 500 },
-    )
-  }
-}
-
-// POST /api/bookings
-// 用于：
-// - 小程序提交预约
-// - 后台老板端创建预约（source = 'admin'）
+// 创建预约（给前台 /booking 用）
 export async function POST(req: NextRequest) {
-  let body: any
   try {
-    body = await req.json()
-  } catch {
-    return NextResponse.json(
-      { error: '请求体必须是 JSON' },
-      { status: 400 },
-    )
-  }
+    const body = await req.json();
 
-  const {
-    userName,
-    phone,
-    shopId,
-    barberId,
-    serviceId,
-    startTime,
-    source,
-  } = body || {}
+    const {
+      userName,
+      phone,
+      shopId,
+      barberId,
+      serviceId,
+      startTime, // 前端一般传 ISO 字符串
+      status,
+      source,
+    } = body ?? {};
 
-  // 简单校验
-  if (!userName || typeof userName !== 'string') {
-    return NextResponse.json(
-      { error: '请填写姓名' },
-      { status: 400 },
-    )
-  }
-
-  if (!phone || typeof phone !== 'string') {
-    return NextResponse.json(
-      { error: '请填写手机号' },
-      { status: 400 },
-    )
-  }
-
-  if (!shopId || !barberId || !serviceId || !startTime) {
-    return NextResponse.json(
-      { error: '缺少必要字段（门店 / 理发师 / 项目 / 开始时间）' },
-      { status: 400 },
-    )
-  }
-
-  let start: Date
-  try {
-    start = new Date(startTime)
-    if (isNaN(start.getTime())) {
-      throw new Error('invalid date')
-    }
-  } catch {
-    return NextResponse.json(
-      { error: '开始时间格式不正确' },
-      { status: 400 },
-    )
-  }
-
-  try {
-    // 1. 检查这个理发师此时间是否已被占用
-    const conflict = await prisma.booking.findFirst({
-      where: {
-        barberId: Number(barberId),
-        startTime: start,
-        status: { not: 'cancelled' },
-      },
-    })
-
-    if (conflict) {
+    // 基础校验
+    if (
+      !userName ||
+      !shopId ||
+      !barberId ||
+      !serviceId ||
+      !startTime
+    ) {
       return NextResponse.json(
-        { error: '该时间段已被预约，请选择其他时间' },
-        { status: 409 },
-      )
+        {
+          success: false,
+          message: '姓名、门店、理发师、服务、开始时间都必须填写',
+        },
+        { status: 400 }
+      );
     }
 
-    // 2. 写入数据库（⚠️ 只传 Prisma 模型里存在的字段）
+    const shopIdNum = Number(shopId);
+    const barberIdNum = Number(barberId);
+    const serviceIdNum = Number(serviceId);
+
+    if (
+      Number.isNaN(shopIdNum) ||
+      Number.isNaN(barberIdNum) ||
+      Number.isNaN(serviceIdNum)
+    ) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: '门店 / 理发师 / 服务 ID 必须是数字',
+        },
+        { status: 400 }
+      );
+    }
+
+    // 把前端传来的时间字符串转成 Date
+    const start = new Date(startTime);
+    if (Number.isNaN(start.getTime())) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: '开始时间格式不正确',
+        },
+        { status: 400 }
+      );
+    }
+
+    // 🚨 核心：根据 serviceId 查到价格，用来写入 booking.price
+    const service = await prisma.service.findUnique({
+      where: { id: serviceIdNum },
+      select: { price: true },
+    });
+
+    if (!service) {
+      return NextResponse.json(
+        {
+          success: false,
+          message: '服务项目不存在',
+        },
+        { status: 400 }
+      );
+    }
+
+    // 2. 写入数据库（只传 Prisma 模型存在的字段）
     const booking = await prisma.booking.create({
       data: {
         userName,
-        phone,
-        shopId: Number(shopId),
-        barberId: Number(barberId),
-        serviceId: Number(serviceId),
+        phone: phone || null,
+        shopId: shopIdNum,
+        barberId: barberIdNum,
+        serviceId: serviceIdNum,
         startTime: start,
-        source: source ?? null, // miniapp / web / admin
-      },
-      include: {
-        shop: true,
-        barber: true,
-        service: true,
-      },
-    })
+        status: status ?? 'scheduled',
+        source: source ?? 'online',
 
-    return NextResponse.json({ booking })
-  } catch (error: any) {
-    console.error('POST /api/bookings error:', error)
-
-    // 唯一键冲突（万一还是撞上）
-    if (error?.code === 'P2002') {
-      return NextResponse.json(
-        { error: '该时间段已被预约，请换一个时间' },
-        { status: 409 },
-      )
-    }
+        // ✅ 新增：价格字段，和 Service.price 对齐
+        price: service.price,
+      },
+    });
 
     return NextResponse.json(
-      { error: '创建预约失败，请稍后再试' },
-      { status: 500 },
-    )
+      {
+        success: true,
+        booking,
+      },
+      { status: 201 }
+    );
+  } catch (error) {
+    console.error('Create booking error:', error);
+    return NextResponse.json(
+      {
+        success: false,
+        message: '服务器开小差了，请稍后再试',
+      },
+      { status: 500 }
+    );
   }
 }
