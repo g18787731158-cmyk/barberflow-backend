@@ -1,28 +1,39 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
-// 获取理发师列表（可按门店过滤）
+// GET /api/barbers?shopId=1
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url)
-  const shopIdParam = searchParams.get('shopId')
-
-  const where: any = {}
-
-  if (shopIdParam) {
-    where.shopId = Number(shopIdParam)
-  }
-
   try {
+    const { searchParams } = new URL(req.url)
+    const shopId = searchParams.get('shopId')
+
+    const where: any = {}
+    if (shopId) {
+      where.shopId = Number(shopId)
+    }
+
     const barbers = await prisma.barber.findMany({
       where,
       orderBy: { id: 'asc' },
+      select: {
+        id: true,
+        name: true,
+        shopId: true,
+      },
     })
 
-    return NextResponse.json({ barbers })
-  } catch (err) {
-    console.error('获取理发师列表失败:', err)
     return NextResponse.json(
-      { error: '获取理发师列表失败' },
+      { success: true, barbers },
+      { status: 200 }
+    )
+  } catch (error) {
+    console.error('GET /api/barbers error', error)
+    return NextResponse.json(
+      {
+        success: false,
+        message: '服务器错误',
+        error: String(error),
+      },
       { status: 500 }
     )
   }
