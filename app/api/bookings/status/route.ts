@@ -1,44 +1,44 @@
 // app/api/bookings/status/route.ts
+
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
-// POST /api/bookings/status  { id, status }
+// POST /api/bookings/status
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { id, status } = body || {}
 
-    if (!id || !status) {
+    // 兼容前端传 id 或 bookingId
+    const bookingId = body.bookingId ?? body.id
+    const status = body.status
+
+    if (!bookingId || !status) {
       return NextResponse.json(
         { success: false, message: '缺少 id 或 status' },
         { status: 400 }
       )
     }
 
-    const bookingId = Number(id)
-    if (Number.isNaN(bookingId)) {
+    // 先查一下有没有这条预约
+    const existing = await prisma.booking.findUnique({
+      where: { id: Number(bookingId) },
+    })
+
+    if (!existing) {
       return NextResponse.json(
-        { success: false, message: 'id 格式不正确' },
-        { status: 400 }
+        { success: false, message: `未找到 id=${bookingId} 的预约` },
+        { status: 404 }
       )
     }
 
-    // 可以先简单限制一下可选状态
-    const allowed = ['scheduled', 'pending', 'completed', 'cancelled']
-    if (!allowed.includes(status)) {
-      return NextResponse.json(
-        { success: false, message: `不支持的状态：${status}` },
-        { status: 400 }
-      )
-    }
-
-    const updated = await prisma.booking.update({
-      where: { id: bookingId },
+    // 真正更新状态
+    const booking = await prisma.booking.update({
+      where: { id: Number(bookingId) },
       data: { status },
     })
 
     return NextResponse.json(
-      { success: true, booking: updated },
+      { success: true, booking },
       { status: 200 }
     )
   } catch (error: any) {
