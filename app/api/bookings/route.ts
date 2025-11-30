@@ -1,5 +1,6 @@
+// app/api/bookings/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'   // ✅ 用默认导入
+import prisma from '@/lib/prisma'
 
 // GET /api/bookings?date=2025-11-30&shopId=1&barberId=1&phone=189xxxx
 export async function GET(req: NextRequest) {
@@ -74,11 +75,12 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 简单防冲突：同一理发师 + 同一时间
+    // ✅ 冲突检查：忽略已取消的预约
     const conflict = await prisma.booking.findFirst({
       where: {
         barberId: Number(barberId),
         startTime: start,
+        NOT: { status: 'cancelled' },
       },
     })
 
