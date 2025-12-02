@@ -29,7 +29,7 @@ export async function GET(req: NextRequest) {
       include: {
         shop: { select: { name: true } },
         barber: { select: { name: true } },
-        service: { select: { name: true } },
+        service: { select: { name: true, price: true } }, // price 顺手带上
       },
     })
 
@@ -75,7 +75,22 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // ✅ 冲突检查：忽略已取消的预约
+    // 1️⃣ 查服务价格（以后可以扩展成理发师 / 门店个性价）
+    const service = await prisma.service.findUnique({
+      where: { id: Number(serviceId) },
+      select: { price: true },
+    })
+
+    if (!service) {
+      return NextResponse.json(
+        { success: false, message: '服务不存在，请刷新后重试' },
+        { status: 400 }
+      )
+    }
+
+    const price = typeof service.price === 'number' ? service.price : 0
+
+    // 2️⃣ 冲突检查：忽略已取消的预约
     const conflict = await prisma.booking.findFirst({
       where: {
         barberId: Number(barberId),
@@ -94,6 +109,7 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // 3️⃣ 创建预约时把价格「锁」进 booking.price
     const booking = await prisma.booking.create({
       data: {
         shopId: Number(shopId),
@@ -103,6 +119,7 @@ export async function POST(req: NextRequest) {
         phone,
         startTime: start,
         source: source || 'miniapp',
+        price, // 👈 关键字段
       },
     })
 
