@@ -2,6 +2,38 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+// 工具：根据 barberId + serviceId 算出最终价格
+async function calcFinalPrice(barberId: number, serviceId: number) {
+  // 1️⃣ 先看理发师对这个服务有没有单独定价
+  const bs = await prisma.barberService.findUnique({
+    where: {
+      barberId_serviceId: {
+        barberId,
+        serviceId,
+      },
+    },
+    select: {
+      price: true,
+    },
+  })
+
+  if (bs && typeof bs.price === 'number') {
+    return bs.price
+  }
+
+  // 2️⃣ 没有专属价，就用服务默认价
+  const svc = await prisma.service.findUnique({
+    where: { id: serviceId },
+    select: { price: true },
+  })
+
+  if (!svc) {
+    throw new Error(`服务不存在: serviceId=${serviceId}`)
+  }
+
+  return svc.price
+}
+
 // GET /api/bookings?date=2025-11-30&shopId=1&barberId=1&phone=189xxxx
 export async function GET(req: NextRequest) {
   try {
@@ -33,10 +65,7 @@ export async function GET(req: NextRequest) {
       },
     })
 
-    return NextResponse.json(
-      { success: true, bookings },
-      { status: 200 },
-    )
+    return NextResponse.json({ success: true, bookings }, { status: 200 })
   } catch (error) {
     console.error('GET /api/bookings error', error)
     return NextResponse.json(
@@ -64,14 +93,7 @@ export async function POST(req: NextRequest) {
       source,
     } = body
 
-    if (
-      !shopId ||
-      !barberId ||
-      !serviceId ||
-      !userName ||
-      !phone ||
-      !startTime
-    ) {
+    if (!shopId || !barberId || !serviceId || !userName || !phone || !startTime) {
       return NextResponse.json(
         { success: false, message: '缺少必要字段' },
         { status: 400 },
@@ -89,18 +111,13 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    // 查一下当前服务的价格，用来锁定到 Booking.price
-    const service = await prisma.service.findUnique({
-      where: { id: Number(serviceId) },
-      select: { price: true },
-    })
+    const barberIdNum = Number(barberId)
+    const serviceIdNum = Number(serviceId)
 
-    const lockedPrice = service?.price ?? 0
-
-    // 防冲突：同一理发师 + 同一时间，且不是已取消的单
+    // ✅ 冲突检查：忽略已取消的预约
     const conflict = await prisma.booking.findFirst({
       where: {
-        barberId: Number(barberId),
+        barberId: barberIdNum,
         startTime: start,
         NOT: { status: 'cancelled' },
       },
@@ -116,31 +133,23 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    // ✅ 计算最终价格：先看 BarberService，再退回 Service.price
+    const finalPrice = await calcFinalPrice(barberIdNum, serviceIdNum)
+
     const booking = await prisma.booking.create({
       data: {
         shopId: Number(shopId),
-        barberId: Number(barberId),
-        serviceId: Number(serviceId),
+        barberId: barberIdNum,
+        serviceId: serviceIdNum,
         userName,
         phone,
         startTime: start,
         source: source || 'miniapp',
-
-        // ⭐ 关键：锁定预约时的价格
-        price: lockedPrice,
-        // payStatus 还是 unpaid，payAmount 等真实支付时再写
-      },
-      include: {
-        shop: { select: { name: true } },
-        barber: { select: { name: true } },
-        service: { select: { name: true, price: true } },
+        price: finalPrice, // ✅ 写死在订单里
       },
     })
 
-    return NextResponse.json(
-      { success: true, booking },
-      { status: 201 },
-    )
+    return NextResponse.json({ success: true, booking }, { status: 201 })
   } catch (error: any) {
     console.error('POST /api/bookings error', error)
     return NextResponse.json(

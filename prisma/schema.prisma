@@ -1,3 +1,5 @@
+// prisma/schema.prisma
+
 generator client {
   provider = "prisma-client-js"
 }
@@ -43,18 +45,40 @@ model Barber {
 
   shop     Shop     @relation(fields: [shopId], references: [id])
   bookings Booking[]
+
+  // ✅ 每个理发师对不同服务的专属定价
+  barberServices BarberService[]
 }
 
 model Service {
   id              Int    @id @default(autoincrement())
   name            String
   durationMinutes Int
-  price           Int
+  price           Int     // 默认价（通用价）
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   bookings Booking[]
+
+  // ✅ 被哪些理发师单独定价
+  barberServices BarberService[]
+}
+
+// ✅ 新增：理发师-服务定价表（可选覆盖价格 & 时长）
+model BarberService {
+  barberId        Int
+  serviceId       Int
+  price           Int?   // 若为空，回退用 Service.price
+  durationMinutes Int?   // 若为空，回退用 Service.durationMinutes
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  barber  Barber  @relation(fields: [barberId], references: [id])
+  service Service @relation(fields: [serviceId], references: [id])
+
+  @@id([barberId, serviceId])
 }
 
 model Booking {
@@ -68,7 +92,7 @@ model Booking {
   status    String   @default("scheduled")
 
   source    String?
-  price      Int?     // 你也可以写 Int @default(0) 看你想不想强制有值
+  price     Int?     // ✅ 实际成交价格（写死在订单上）
 
   payStatus  String   @default("unpaid")
   payAmount  Int      @default(0)
