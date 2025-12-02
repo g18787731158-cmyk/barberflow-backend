@@ -1,3 +1,4 @@
+// app/api/bookings/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
@@ -34,7 +35,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json(
       { success: true, bookings },
-      { status: 200 }
+      { status: 200 },
     )
   } catch (error) {
     console.error('GET /api/bookings error', error)
@@ -44,7 +45,7 @@ export async function GET(req: NextRequest) {
         message: 'GET 服务器错误',
         error: String(error),
       },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }
@@ -53,13 +54,27 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { shopId, barberId, serviceId, userName, phone, startTime, source } =
-      body
+    const {
+      shopId,
+      barberId,
+      serviceId,
+      userName,
+      phone,
+      startTime,
+      source,
+    } = body
 
-    if (!shopId || !barberId || !serviceId || !userName || !phone || !startTime) {
+    if (
+      !shopId ||
+      !barberId ||
+      !serviceId ||
+      !userName ||
+      !phone ||
+      !startTime
+    ) {
       return NextResponse.json(
         { success: false, message: '缺少必要字段' },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
@@ -70,23 +85,19 @@ export async function POST(req: NextRequest) {
           success: false,
           message: `startTime 格式不正确: ${startTime}`,
         },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
-    // 先查服务，拿到标准价格
+    // 查一下当前服务的价格，用来锁定到 Booking.price
     const service = await prisma.service.findUnique({
       where: { id: Number(serviceId) },
+      select: { price: true },
     })
 
-    if (!service) {
-      return NextResponse.json(
-        { success: false, message: '服务项目不存在' },
-        { status: 400 }
-      )
-    }
+    const lockedPrice = service?.price ?? 0
 
-    // ✅ 冲突检查：忽略已取消的预约
+    // 防冲突：同一理发师 + 同一时间，且不是已取消的单
     const conflict = await prisma.booking.findFirst({
       where: {
         barberId: Number(barberId),
@@ -101,7 +112,7 @@ export async function POST(req: NextRequest) {
           success: false,
           message: '该时间段已被预约，请换一个时间',
         },
-        { status: 409 }
+        { status: 409 },
       )
     }
 
@@ -114,14 +125,21 @@ export async function POST(req: NextRequest) {
         phone,
         startTime: start,
         source: source || 'miniapp',
-        // ⭐ 关键：写入本单价格（先直接用服务价，后面再支持优惠/特殊价）
-        price: service.price,
+
+        // ⭐ 关键：锁定预约时的价格
+        price: lockedPrice,
+        // payStatus 还是 unpaid，payAmount 等真实支付时再写
+      },
+      include: {
+        shop: { select: { name: true } },
+        barber: { select: { name: true } },
+        service: { select: { name: true, price: true } },
       },
     })
 
     return NextResponse.json(
       { success: true, booking },
-      { status: 201 }
+      { status: 201 },
     )
   } catch (error: any) {
     console.error('POST /api/bookings error', error)
@@ -133,7 +151,7 @@ export async function POST(req: NextRequest) {
         code: (error && error.code) || null,
         meta: (error && error.meta) || null,
       },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }
