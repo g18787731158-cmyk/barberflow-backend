@@ -1,7 +1,9 @@
-// pages/api/bookings/create.(ts|js)
+// pages/api/bookings/create.ts
+import type { NextApiRequest, NextApiResponse } from 'next'
 import prisma from '@/lib/prisma'
 
-function buildStartTime(date, time) {
+// 明确参数类型，避免 noImplicitAny 报错
+function buildStartTime(date: string, time: string): Date | null {
   // date: "2025-12-04", time: "10:00"
   // 拼成 "2025-12-04T10:00:00"
   const iso = `${date}T${time}:00`
@@ -12,7 +14,10 @@ function buildStartTime(date, time) {
   return d
 }
 
-export default async function handler(req, res) {
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse,
+) {
   if (req.method !== 'POST') {
     res.setHeader('Allow', ['POST'])
     return res
@@ -30,7 +35,16 @@ export default async function handler(req, res) {
       date,
       time,
       source,
-    } = req.body || {}
+    } = (req.body || {}) as {
+      shopId?: number | string
+      barberId?: number | string
+      serviceId?: number | string
+      userName?: string
+      phone?: string
+      date?: string
+      time?: string
+      source?: string
+    }
 
     // ⭐ 保留你原来的提示逻辑
     if (
