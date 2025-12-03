@@ -1,118 +1,120 @@
 // app/api/miniapp/available-slots/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'  // ⭐ 这里改成默认导入
+import prisma from '@/lib/prisma'
 
-const SLOT_MINUTES = 30 // 半小时一格
+const WORK_START_HOUR = 10   // 10:00 开始
+const WORK_END_HOUR = 21     // 21:00 收工
+const SLOT_MINUTES = 30      // 每格 30 分钟
 
-function generateSlotsForDate(
-  dateStr: string,
-  startHour: number,
-  endHour: number
-): Date[] {
-  const [year, month, day] = dateStr.split('-').map(Number)
-  const start = new Date(year, month - 1, day, startHour, 0, 0)
-  const end = new Date(year, month - 1, day, endHour, 0, 0)
-
-  const slots: Date[] = []
-  const current = new Date(start)
-
-  while (current < end) {
-    slots.push(new Date(current))
-    current.setMinutes(current.getMinutes() + SLOT_MINUTES)
-  }
-
-  return slots
+function addMinutes(date: Date, minutes: number) {
+  return new Date(date.getTime() + minutes * 60 * 1000)
 }
 
-function formatTimeLabel(d: Date): string {
-  const h = String(d.getHours()).padStart(2, '0')
-  const m = String(d.getMinutes()).padStart(2, '0')
-  return `${h}:${m}`
+function buildDayRange(dateStr: string) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+
+  // 一天的开始/结束（用于查当天所有预约）
+  const start = new Date(y, m - 1, d, 0, 0, 0)
+  const end = new Date(y, m - 1, d + 1, 0, 0, 0)
+
+  // 时间格的开始/结束（例如 10:00 ~ 21:00）
+  const slotsStart = new Date(y, m - 1, d, WORK_START_HOUR, 0, 0)
+  const slotsEnd = new Date(y, m - 1, d, WORK_END_HOUR, 0, 0) // 不含 21:00
+
+  return { start, end, slotsStart, slotsEnd }
 }
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
     const barberIdParam = searchParams.get('barberId')
-    const date = searchParams.get('date') // 'YYYY-MM-DD'
+    const dateStr = searchParams.get('date')
 
-    if (!barberIdParam || !date) {
+    if (!barberIdParam || !dateStr) {
       return NextResponse.json(
         { error: 'Missing barberId or date' },
-        { status: 400 }
+        { status: 400 },
       )
     }
 
     const barberId = Number(barberIdParam)
     if (Number.isNaN(barberId)) {
-      return NextResponse.json(
-        { error: 'Invalid barberId' },
-        { status: 400 }
-      )
+      return NextResponse.json({ error: 'Invalid barberId' }, { status: 400 })
     }
 
-    // 先查出理发师的上下班时间
-    const barber = await prisma.barber.findUnique({
-      where: { id: barberId },
-    })
+    const { start: dayStart, end: dayEnd, slotsStart, slotsEnd } =
+      buildDayRange(dateStr)
 
-    if (!barber) {
-      return NextResponse.json(
-        { error: 'Barber not found' },
-        { status: 404 }
-      )
-    }
-
-    const dayStart = new Date(`${date}T00:00:00`)
-    const dayEnd = new Date(`${date}T23:59:59`)
-
-    // 查当日该理发师所有未取消预约（status != 'cancelled'）
+    // 查当天该理发师所有未取消的预约，顺带把 service 的 durationMinutes 带出来
     const bookings = await prisma.booking.findMany({
       where: {
         barberId,
         startTime: {
           gte: dayStart,
-          lte: dayEnd,
+          lt: dayEnd,
         },
-        NOT: {
-          status: 'cancelled',
+        status: {
+          notIn: ['cancelled'],
         },
       },
-      select: {
-        startTime: true,
+      include: {
+        service: {
+          select: {
+            durationMinutes: true,
+          },
+        },
+      },
+      orderBy: {
+        startTime: 'asc',
       },
     })
 
-    const slots = generateSlotsForDate(
-      date,
-      barber.workStartHour,
-      barber.workEndHour
-    ).map((slot) => {
-      const conflict = bookings.some((b) => {
-        const booked = new Date(b.startTime)
-        return (
-          booked.getHours() === slot.getHours() &&
-          booked.getMinutes() === slot.getMinutes()
-        )
+    // 把每个预约转换为一个「占用时间段」： [start, end)
+    const blockedRanges = bookings.map((b) => {
+      // 如果没取到服务时长，就按一格 30 分钟兜底
+      const duration = b.service?.durationMinutes ?? SLOT_MINUTES
+      const end = addMinutes(b.startTime, duration)
+      return { start: b.startTime, end }
+    })
+
+    // 生成当天的每个 30 分钟时间格
+    const slots: {
+      label: string
+      startTime: string
+      available: boolean
+    }[] = []
+
+    let cursor = slotsStart
+    while (cursor < slotsEnd) {
+      const slotStart = new Date(cursor.getTime())
+      const hour = String(slotStart.getHours()).padStart(2, '0')
+      const minute = String(slotStart.getMinutes()).padStart(2, '0')
+      const label = `${hour}:${minute}`
+
+      // ⭐ 关键逻辑：只要这个时间点落在任何一个预约的 [start, end) 区间内，就视为已占用
+      const isBlocked = blockedRanges.some(
+        (r) => slotStart >= r.start && slotStart < r.end,
+      )
+
+      slots.push({
+        label,
+        startTime: slotStart.toISOString(),
+        available: !isBlocked,
       })
 
-      return {
-        label: formatTimeLabel(slot), // 'HH:mm'
-        startTime: slot.toISOString(),
-        available: !conflict,
-      }
-    })
+      cursor = addMinutes(cursor, SLOT_MINUTES)
+    }
 
     return NextResponse.json({
       barberId,
-      date,
+      date: dateStr,
       slots,
     })
-  } catch (error) {
-    console.error('[available-slots] error:', error)
+  } catch (err) {
+    console.error('[miniapp/available-slots] error:', err)
     return NextResponse.json(
       { error: 'Internal Server Error' },
-      { status: 500 }
+      { status: 500 },
     )
   }
 }
