@@ -1,5 +1,4 @@
 // prisma/schema.prisma
-
 generator client {
   provider = "prisma-client-js"
 }
@@ -8,9 +7,9 @@ datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
   // shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
-  // 👉 先把 shadowDatabaseUrl 关掉，方便本地 & Vercel 生成 Prisma Client
 }
 
+// ===== 门店 =====
 model Shop {
   id      Int     @id @default(autoincrement())
   name    String
@@ -19,20 +18,22 @@ model Shop {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  billingBaseMode   String @default("none")
-  billingBaseValue  Int    @default(0)
-  billingExtraMode  String @default("none")
-  billingExtraValue Int    @default(0)
+  // 计费 / 分账相关（现在先不深挖，用默认值）
+  billingBaseMode   String  @default("none")
+  billingBaseValue  Int     @default(0)
+  billingExtraMode  String  @default("none")
+  billingExtraValue Int     @default(0)
 
-  platformShareBasis Int   @default(0)
-  shopShareBasis     Int   @default(0)
-  barberShareBasis   Int   @default(0)
+  platformShareBasis Int    @default(0)
+  shopShareBasis     Int    @default(0)
+  barberShareBasis   Int    @default(0)
   enableAutoSplit    Boolean @default(false)
 
   barbers  Barber[]
   bookings Booking[]
 }
 
+// ===== 理发师 =====
 model Barber {
   id            Int    @id @default(autoincrement())
   name          String
@@ -46,31 +47,32 @@ model Barber {
   shop     Shop     @relation(fields: [shopId], references: [id])
   bookings Booking[]
 
-  // ✅ 每个理发师对不同服务的专属定价
+  // ⭐ 新增：理发师对各服务的专属价
   barberServices BarberService[]
 }
 
+// ===== 服务项目（通用价）=====
 model Service {
   id              Int    @id @default(autoincrement())
   name            String
   durationMinutes Int
-  price           Int     // 默认价（通用价）
+  price           Int      // 通用基础价（比如 80）
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  bookings Booking[]
-
-  // ✅ 被哪些理发师单独定价
+  bookings       Booking[]
+  // ⭐ 新增：服务在不同理发师下的专属价
   barberServices BarberService[]
 }
 
-// ✅ 新增：理发师-服务定价表（可选覆盖价格 & 时长）
+// ===== 理发师-服务 专属价格表 =====
+// 例如：barberId=1（老郭） + serviceId=1（理发） => 120
 model BarberService {
-  barberId        Int
-  serviceId       Int
-  price           Int?   // 若为空，回退用 Service.price
-  durationMinutes Int?   // 若为空，回退用 Service.durationMinutes
+  id        Int  @id @default(autoincrement())
+  barberId  Int
+  serviceId Int
+  price     Int?   // 专属价，可空；为空就用 Service.price
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -78,9 +80,11 @@ model BarberService {
   barber  Barber  @relation(fields: [barberId], references: [id])
   service Service @relation(fields: [serviceId], references: [id])
 
-  @@id([barberId, serviceId])
+  @@unique([barberId, serviceId])
+  @@index([serviceId])
 }
 
+// ===== 预约 =====
 model Booking {
   id        Int      @id @default(autoincrement())
   userName  String
@@ -92,8 +96,7 @@ model Booking {
   status    String   @default("scheduled")
 
   source    String?
-  price     Int?     // ✅ 实际成交价格（写死在订单上）
-
+  price      Int?     // 下单时实际成交价（后面会用）
   payStatus  String   @default("unpaid")
   payAmount  Int      @default(0)
   payOrderNo String?
