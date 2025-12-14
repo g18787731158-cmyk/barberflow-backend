@@ -5,7 +5,7 @@ import prisma from '@/lib/prisma'
 // 工具：根据 barberId + serviceId 算出最终价格
 async function calcFinalPrice(barberId: number, serviceId: number) {
   // 1️⃣ 先看理发师对这个服务有没有单独定价
-  const bs = await prisma.barberService.findUnique({
+  const bs = await prisma.barberservice.findUnique({
     where: {
       barberId_serviceId: {
         barberId,

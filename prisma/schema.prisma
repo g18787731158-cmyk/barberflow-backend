@@ -14,7 +14,7 @@ model barber {
   workStartHour Int
   workEndHour   Int
   createdAt     DateTime        @default(now())
-  updatedAt     DateTime
+  updatedAt     DateTime        @updatedAt
   shop          shop            @relation(fields: [shopId], references: [id], map: "Barber_shopId_fkey")
   barberservice barberservice[]
   booking       booking[]
@@ -28,7 +28,7 @@ model barberservice {
   serviceId Int
   price     Int?
   createdAt DateTime @default(now())
-  updatedAt DateTime
+  updatedAt DateTime @updatedAt
   barber    barber   @relation(fields: [barberId], references: [id], map: "BarberService_barberId_fkey")
   service   service  @relation(fields: [serviceId], references: [id], map: "BarberService_serviceId_fkey")
 
@@ -54,7 +54,7 @@ model booking {
   splitStatus String    @default("pending")
   splitDetail String?
   createdAt   DateTime  @default(now())
-  updatedAt   DateTime
+  updatedAt   DateTime  @updatedAt
   barber      barber    @relation(fields: [barberId], references: [id], map: "Booking_barberId_fkey")
   service     service   @relation(fields: [serviceId], references: [id], map: "Booking_serviceId_fkey")
   shop        shop      @relation(fields: [shopId], references: [id], map: "Booking_shopId_fkey")
@@ -72,7 +72,7 @@ model service {
   durationMinutes Int
   price           Int
   createdAt       DateTime        @default(now())
-  updatedAt       DateTime
+  updatedAt       DateTime        @updatedAt
   barberservice   barberservice[]
   booking         booking[]
 }
@@ -82,7 +82,7 @@ model shop {
   name               String
   address            String?
   createdAt          DateTime  @default(now())
-  updatedAt          DateTime
+  updatedAt          DateTime  @updatedAt
   billingBaseMode    String    @default("none")
   billingBaseValue   Int       @default(0)
   billingExtraMode   String    @default("none")

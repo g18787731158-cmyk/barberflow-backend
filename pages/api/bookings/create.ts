@@ -2,27 +2,24 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
 import prisma from '@/lib/prisma'
 
-// 明确参数类型，避免 noImplicitAny 报错
-function buildStartTime(date: string, time: string): Date | null {
-  // date: "2025-12-04", time: "10:00"
-  // 拼成 "2025-12-04T10:00:00"
-  const iso = `${date}T${time}:00`
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) {
-    return null
-  }
-  return d
+async function calcFinalPrice(barberId: number, serviceId: number) {
+  // ✅ 注意：模型名是 barberservice（小写）
+  const bs = await prisma.barberservice.findUnique({
+    where: { barberId_serviceId: { barberId, serviceId } },
+    select: { price: true },
+  })
+  if (bs && typeof bs.price === 'number') return bs.price
+
+  const s = await prisma.service.findUnique({
+    where: { id: serviceId },
+    select: { price: true },
+  })
+  return s?.price ?? 0
 }
 
-export default async function handler(
-  req: NextApiRequest,
-  res: NextApiResponse,
-) {
+export default async function handler(req: NextApiRequest, res: NextApiResponse) {
   if (req.method !== 'POST') {
-    res.setHeader('Allow', ['POST'])
-    return res
-      .status(405)
-      .json({ success: false, message: 'Method not allowed' })
+    return res.status(405).json({ success: false, message: 'Method Not Allowed' })
   }
 
   try {
@@ -32,132 +29,60 @@ export default async function handler(
       serviceId,
       userName,
       phone,
-      date,
-      time,
+      startTime,
       source,
-    } = (req.body || {}) as {
-      shopId?: number | string
-      barberId?: number | string
-      serviceId?: number | string
-      userName?: string
-      phone?: string
-      date?: string
-      time?: string
-      source?: string
-    }
+    } = req.body || {}
 
-    // ⭐ 保留你原来的提示逻辑
-    if (
-      !shopId ||
-      !barberId ||
-      !serviceId ||
-      !userName ||
-      !date ||
-      !time
-    ) {
+    const shopIdNum = Number(shopId)
+    const barberIdNum = Number(barberId)
+    const serviceIdNum = Number(serviceId)
+
+    if (!shopIdNum || !barberIdNum || !serviceIdNum || !startTime) {
       return res.status(400).json({
         success: false,
-        message: '门店, 理发师, 服务, 姓名, 日期, 时间都要填',
+        message: 'shopId / barberId / serviceId / startTime 必填',
       })
     }
 
-    // 手机号简单兜一下（详细校验前端已经做）
-    if (!phone || typeof phone !== 'string' || phone.length < 6) {
-      return res.status(400).json({
-        success: false,
-        message: '手机号格式不正确',
-      })
+    const start = new Date(startTime)
+    if (Number.isNaN(start.getTime())) {
+      return res.status(400).json({ success: false, message: 'startTime 不合法' })
     }
 
-    const startTime = buildStartTime(date, time)
-    if (!startTime) {
-      return res.status(400).json({
-        success: false,
-        message: '时间格式不正确',
-      })
-    }
-
-    // 查服务价格 & 理发师专属价
-    const service = await prisma.service.findUnique({
-      where: { id: Number(serviceId) },
-      select: {
-        price: true,
-        durationMinutes: true,
-      },
+    // 冲突检测：同一理发师同一时间点只能有一单
+    const exists = await prisma.booking.findUnique({
+      where: { barberId_startTime: { barberId: barberIdNum, startTime: start } },
+      select: { id: true },
     })
 
-    if (!service) {
-      return res.status(400).json({
-        success: false,
-        message: '服务不存在',
-      })
-    }
-
-    const barberService = await prisma.barberService.findUnique({
-      where: {
-        barberId_serviceId: {
-          barberId: Number(barberId),
-          serviceId: Number(serviceId),
-        },
-      },
-      select: {
-        price: true,
-      },
-    })
-
-    const finalPrice =
-      (barberService && barberService.price != null
-        ? barberService.price
-        : service.price) ?? 0
-
-    // 防止同一理发师同一开始时间重复预约
-    const conflict = await prisma.booking.findFirst({
-      where: {
-        barberId: Number(barberId),
-        startTime,
-        status: {
-          notIn: ['cancelled'],
-        },
-      },
-    })
-
-    if (conflict) {
-      return res.status(400).json({
+    if (exists) {
+      return res.status(409).json({
         success: false,
         message: '该时间段已被预约，请选择其他时间',
       })
     }
 
+    const finalPrice = await calcFinalPrice(barberIdNum, serviceIdNum)
+
     const created = await prisma.booking.create({
       data: {
-        shopId: Number(shopId),
-        barberId: Number(barberId),
-        serviceId: Number(serviceId),
-        userName: String(userName),
-        phone: String(phone),
-        startTime,
+        shopId: shopIdNum,
+        barberId: barberIdNum,
+        serviceId: serviceIdNum,
+        userName: String(userName || '匿名客人'),
+        phone: phone ? String(phone) : undefined,
+        startTime: start,
         status: 'scheduled',
-        source: source || 'admin', // 小程序会传 miniapp，后台不传也可以
+        source: source ? String(source) : 'miniapp',
         price: finalPrice,
-        payStatus: 'unpaid',
-        payAmount: 0,
+        // ✅ updatedAt 不要再传了：schema 里已经 @updatedAt
       },
-      include: {
-        shop: true,
-        barber: true,
-        service: true,
-      },
+      include: { shop: true, barber: true, service: true },
     })
 
-    return res.status(200).json({
-      success: true,
-      booking: created,
-    })
-  } catch (err) {
-    console.error('[pages/api/bookings/create] error:', err)
-    return res.status(500).json({
-      success: false,
-      message: '服务器内部错误',
-    })
+    return res.status(200).json({ success: true, booking: created })
+  } catch (e: any) {
+    console.error('create booking error:', e)
+    return res.status(500).json({ success: false, message: '服务器错误' })
   }
 }

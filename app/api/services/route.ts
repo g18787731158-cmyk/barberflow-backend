@@ -39,7 +39,7 @@ export async function GET(req: NextRequest) {
     if (barberId) {
       // 这里用的是我们在 schema 里加的 BarberService 表
       // 用来存每个理发师对每个服务的专属价格
-      const overrides = await prisma.barberService.findMany({
+      const overrides = await prisma.barberservice.findMany({
         where: { barberId },
         select: {
           serviceId: true,
