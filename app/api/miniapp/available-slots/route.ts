@@ -78,11 +78,13 @@ export async function GET(req: NextRequest) {
     })
 
     // 生成当天的每个 30 分钟时间格
-    const slots: {
+    type Slot = {
       label: string
       startTime: string
       available: boolean
-    }[] = []
+    }
+
+    const rawSlots: Slot[] = []
 
     let cursor = slotsStart
     while (cursor < slotsEnd) {
@@ -91,12 +93,12 @@ export async function GET(req: NextRequest) {
       const minute = String(slotStart.getMinutes()).padStart(2, '0')
       const label = `${hour}:${minute}`
 
-      // ⭐ 关键逻辑：只要这个时间点落在任何一个预约的 [start, end) 区间内，就视为已占用
+      // 只要这个时间点落在任何一个预约的 [start, end) 区间内，就视为已占用
       const isBlocked = blockedRanges.some(
         (r) => slotStart >= r.start && slotStart < r.end,
       )
 
-      slots.push({
+      rawSlots.push({
         label,
         startTime: slotStart.toISOString(),
         available: !isBlocked,
@@ -105,11 +107,15 @@ export async function GET(req: NextRequest) {
       cursor = addMinutes(cursor, SLOT_MINUTES)
     }
 
-    return NextResponse.json({
-      barberId,
-      date: dateStr,
-      slots,
-    })
+    // ⭐ 关键：这里把结构转换成小程序更好用的格式
+    const responseSlots = rawSlots.map((s) => ({
+      time: s.label,          // "10:00"
+      label: s.label,         // 仍然给 label，前端用哪个都行
+      disabled: !s.available, // true = 不能选（被占用了）
+    }))
+
+    // 直接返回数组，前端 Array.isArray(res) 那一支就会命中
+    return NextResponse.json(responseSlots)
   } catch (err) {
     console.error('[miniapp/available-slots] error:', err)
     return NextResponse.json(

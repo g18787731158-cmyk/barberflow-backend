@@ -1,4 +1,3 @@
-// prisma/schema.prisma
 generator client {
   provider = "prisma-client-js"
 }
@@ -6,116 +5,92 @@ generator client {
 datasource db {
   provider = "mysql"
   url      = env("DATABASE_URL")
-  // shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
-// ===== 门店 =====
-model Shop {
-  id      Int     @id @default(autoincrement())
-  name    String
-  address String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  // 计费 / 分账相关（现在先不深挖，用默认值）
-  billingBaseMode   String  @default("none")
-  billingBaseValue  Int     @default(0)
-  billingExtraMode  String  @default("none")
-  billingExtraValue Int     @default(0)
-
-  platformShareBasis Int    @default(0)
-  shopShareBasis     Int    @default(0)
-  barberShareBasis   Int    @default(0)
-  enableAutoSplit    Boolean @default(false)
-
-  barbers  Barber[]
-  bookings Booking[]
-}
-
-// ===== 理发师 =====
-model Barber {
-  id            Int    @id @default(autoincrement())
+model barber {
+  id            Int             @id @default(autoincrement())
   name          String
   shopId        Int
   workStartHour Int
   workEndHour   Int
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime
+  shop          shop            @relation(fields: [shopId], references: [id], map: "Barber_shopId_fkey")
+  barberservice barberservice[]
+  booking       booking[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  shop     Shop     @relation(fields: [shopId], references: [id])
-  bookings Booking[]
-
-  // ⭐ 新增：理发师对各服务的专属价
-  barberServices BarberService[]
+  @@index([shopId], map: "Barber_shopId_fkey")
 }
 
-// ===== 服务项目（通用价）=====
-model Service {
-  id              Int    @id @default(autoincrement())
+model barberservice {
+  id        Int      @id @default(autoincrement())
+  barberId  Int
+  serviceId Int
+  price     Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime
+  barber    barber   @relation(fields: [barberId], references: [id], map: "BarberService_barberId_fkey")
+  service   service  @relation(fields: [serviceId], references: [id], map: "BarberService_serviceId_fkey")
+
+  @@unique([barberId, serviceId], map: "BarberService_barberId_serviceId_key")
+  @@index([serviceId], map: "BarberService_serviceId_idx")
+}
+
+model booking {
+  id          Int       @id @default(autoincrement())
+  userName    String
+  phone       String?
+  shopId      Int
+  barberId    Int
+  serviceId   Int
+  startTime   DateTime
+  status      String    @default("scheduled")
+  source      String?
+  price       Int?
+  payStatus   String    @default("unpaid")
+  payAmount   Int       @default(0)
+  payOrderNo  String?
+  payTime     DateTime?
+  splitStatus String    @default("pending")
+  splitDetail String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime
+  barber      barber    @relation(fields: [barberId], references: [id], map: "Booking_barberId_fkey")
+  service     service   @relation(fields: [serviceId], references: [id], map: "Booking_serviceId_fkey")
+  shop        shop      @relation(fields: [shopId], references: [id], map: "Booking_shopId_fkey")
+
+  @@unique([barberId, startTime], map: "Booking_barberId_startTime_key")
+  @@index([barberId], map: "Booking_barberId_idx")
+  @@index([phone], map: "Booking_phone_idx")
+  @@index([serviceId], map: "Booking_serviceId_idx")
+  @@index([shopId], map: "Booking_shopId_idx")
+}
+
+model service {
+  id              Int             @id @default(autoincrement())
   name            String
   durationMinutes Int
-  price           Int      // 通用基础价（比如 80）
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  bookings       Booking[]
-  // ⭐ 新增：服务在不同理发师下的专属价
-  barberServices BarberService[]
+  price           Int
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime
+  barberservice   barberservice[]
+  booking         booking[]
 }
 
-// ===== 理发师-服务 专属价格表 =====
-// 例如：barberId=1（老郭） + serviceId=1（理发） => 120
-model BarberService {
-  id        Int  @id @default(autoincrement())
-  barberId  Int
-  serviceId Int
-  price     Int?   // 专属价，可空；为空就用 Service.price
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  barber  Barber  @relation(fields: [barberId], references: [id])
-  service Service @relation(fields: [serviceId], references: [id])
-
-  @@unique([barberId, serviceId])
-  @@index([serviceId])
-}
-
-// ===== 预约 =====
-model Booking {
-  id        Int      @id @default(autoincrement())
-  userName  String
-  phone     String?
-  shopId    Int
-  barberId  Int
-  serviceId Int
-  startTime DateTime
-  status    String   @default("scheduled")
-
-  source    String?
-  price      Int?     // 下单时实际成交价（后面会用）
-  payStatus  String   @default("unpaid")
-  payAmount  Int      @default(0)
-  payOrderNo String?
-  payTime    DateTime?
-
-  splitStatus String  @default("pending")
-  splitDetail String?
-
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  shop    Shop    @relation(fields: [shopId], references: [id])
-  barber  Barber  @relation(fields: [barberId], references: [id])
-  service Service @relation(fields: [serviceId], references: [id])
-
-  @@unique([barberId, startTime])
-
-  @@index([shopId])
-  @@index([barberId])
-  @@index([serviceId])
-  @@index([phone])
+model shop {
+  id                 Int       @id @default(autoincrement())
+  name               String
+  address            String?
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime
+  billingBaseMode    String    @default("none")
+  billingBaseValue   Int       @default(0)
+  billingExtraMode   String    @default("none")
+  billingExtraValue  Int       @default(0)
+  platformShareBasis Int       @default(0)
+  shopShareBasis     Int       @default(0)
+  barberShareBasis   Int       @default(0)
+  enableAutoSplit    Boolean   @default(false)
+  barber             barber[]
+  booking            booking[]
 }
