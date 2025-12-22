@@ -1,147 +1,144 @@
 // app/api/barbers/stats/route.ts
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
-// 工具：把 Date 转成 YYYY-MM-DD
-function formatDate(d: Date) {
-  const y = d.getFullYear()
-  const m = (d.getMonth() + 1).toString().padStart(2, '0')
-  const day = d.getDate().toString().padStart(2, '0')
-  return `${y}-${m}-${day}`
-}
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
 
-function getDayRange(dateStr: string) {
-  const d = new Date(`${dateStr}T00:00:00+08:00`)
-  const start = d
-  const end = new Date(d.getTime() + 24 * 60 * 60 * 1000 - 1)
-  return { start, end }
-}
-
-function getWeekRange(dateStr: string) {
-  const d = new Date(`${dateStr}T00:00:00+08:00`)
-  const day = d.getDay() || 7 // 周一 = 1, 周日 = 7
-  const monday = new Date(d.getTime() - (day - 1) * 24 * 60 * 60 * 1000)
-  const sunday = new Date(monday.getTime() + 7 * 24 * 60 * 60 * 1000 - 1)
-  return { start: monday, end: sunday }
-}
-
-function getMonthRange(dateStr: string) {
-  const d = new Date(`${dateStr}T00:00:00+08:00`)
-  const start = new Date(d.getFullYear(), d.getMonth(), 1)
-  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999)
-  return { start, end }
-}
-
-// 统一用 “status = completed” 来统计，先不管付没付钱
-const COMPLETED_STATUS = 'completed'
-
-// GET /api/barbers/stats?barberId=1&date=2025-12-03
-export async function GET(req: NextRequest) {
+function cnDateString(date = new Date()) {
   try {
-    const { searchParams } = new URL(req.url)
-    const barberIdStr = searchParams.get('barberId') || '1'
-    const dateStr = searchParams.get('date') || formatDate(new Date())
-
-    const barberId = Number(barberIdStr)
-    if (!barberId || Number.isNaN(barberId)) {
-      return NextResponse.json(
-        { success: false, message: 'barberId 不合法' },
-        { status: 400 }
-      )
-    }
-
-    const { start: todayStart, end: todayEnd } = getDayRange(dateStr)
-    const { start: weekStart, end: weekEnd } = getWeekRange(dateStr)
-    const { start: monthStart, end: monthEnd } = getMonthRange(dateStr)
-
-    // 今天已完成
-    const todayBookings = await prisma.booking.findMany({
-      where: {
-        barberId,
-        status: COMPLETED_STATUS,
-        startTime: { gte: todayStart, lte: todayEnd },
-      },
-      include: {
-        shop: { select: { name: true } },
-        service: { select: { name: true, price: true } },
-      },
-      orderBy: { startTime: 'asc' },
-    })
-
-    // 本周、本月、累计只要数量，可以只拉 id + price
-    const weekBookings = await prisma.booking.findMany({
-      where: {
-        barberId,
-        status: COMPLETED_STATUS,
-        startTime: { gte: weekStart, lte: weekEnd },
-      },
-      include: {
-        service: { select: { price: true } },
-      },
-    })
-
-    const monthBookings = await prisma.booking.findMany({
-      where: {
-        barberId,
-        status: COMPLETED_STATUS,
-        startTime: { gte: monthStart, lte: monthEnd },
-      },
-      include: {
-        service: { select: { price: true } },
-      },
-    })
-
-    const totalBookings = await prisma.booking.findMany({
-      where: {
-        barberId,
-        status: COMPLETED_STATUS,
-      },
-      include: {
-        service: { select: { price: true } },
-      },
-    })
-
-    // 金额优先用 booking.price，其次 service.price
-    const sumAmount = (list: any[]) =>
-      list.reduce((sum, b) => {
-        const price =
-          (typeof b.price === 'number' ? b.price : null) ??
-          (b.service && typeof b.service.price === 'number'
-            ? b.service.price
-            : 0)
-        return sum + price
-      }, 0)
-
-    const stats = {
-      todayCount: todayBookings.length,
-      todayAmount: sumAmount(todayBookings),
-      weekCount: weekBookings.length,
-      weekAmount: sumAmount(weekBookings),
-      monthCount: monthBookings.length,
-      monthAmount: sumAmount(monthBookings),
-      totalCount: totalBookings.length,
-      totalAmount: sumAmount(totalBookings),
-    }
-
-    return NextResponse.json(
-      {
-        success: true,
-        date: dateStr,
-        barberId,
-        stats,
-        bookings: todayBookings,
-      },
-      { status: 200 }
-    )
-  } catch (error) {
-    console.error('GET /api/barbers/stats error', error)
-    return NextResponse.json(
-      {
-        success: false,
-        message: '服务器错误',
-        error: String(error),
-      },
-      { status: 500 }
-    )
+    return new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date)
+  } catch {
+    const ms = date.getTime() + 8 * 60 * 60 * 1000
+    return new Date(ms).toISOString().slice(0, 10)
   }
+}
+
+function dayStartCN(d: string) {
+  return new Date(`${d}T00:00:00.000+08:00`)
+}
+
+function addDays(date: Date, days: number) {
+  const x = new Date(date)
+  x.setDate(x.getDate() + days)
+  return x
+}
+
+function monthStartCN(d: string) {
+  const [y, m] = d.split('-')
+  return new Date(`${y}-${m}-01T00:00:00.000+08:00`)
+}
+
+function addMonths(date: Date, months: number) {
+  const x = new Date(date)
+  x.setMonth(x.getMonth() + months)
+  return x
+}
+
+function amountOf(b: { price: any; payAmount: any }) {
+  return Number(b.payAmount ?? b.price ?? 0)
+}
+
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const barberId = Number(searchParams.get('barberId') || 0)
+  if (!barberId) {
+    return NextResponse.json({ error: 'barberId is required' }, { status: 400 })
+  }
+
+  const d = cnDateString()
+  const startToday = dayStartCN(d)
+  const endToday = addDays(startToday, 1)
+
+  // 周一为一周开始
+  const dow = startToday.getDay() // 0 Sun ... 6 Sat
+  const diffToMon = (dow + 6) % 7
+  const startWeek = addDays(startToday, -diffToMon)
+  const endWeek = addDays(startWeek, 7)
+
+  const startMonth = monthStartCN(d)
+  const endMonth = addMonths(startMonth, 1)
+
+  // 今日完成
+  const todayCompleted = await prisma.booking.findMany({
+    where: {
+      barberId,
+      status: 'COMPLETED',
+      startTime: { gte: startToday, lt: endToday },
+    },
+    select: { price: true, payAmount: true },
+  })
+
+  // 本周完成
+  const weekCompleted = await prisma.booking.findMany({
+    where: {
+      barberId,
+      status: 'COMPLETED',
+      startTime: { gte: startWeek, lt: endWeek },
+    },
+    select: { price: true, payAmount: true },
+  })
+
+  // 本月完成
+  const monthCompleted = await prisma.booking.findMany({
+    where: {
+      barberId,
+      status: 'COMPLETED',
+      startTime: { gte: startMonth, lt: endMonth },
+    },
+    select: { price: true, payAmount: true },
+  })
+
+  // 累计完成（不限制日期）
+  const totalCompleted = await prisma.booking.findMany({
+    where: { barberId, status: 'COMPLETED' },
+    select: { price: true, payAmount: true },
+  })
+
+  // 最近预约（最多10条，不限状态）
+  const recent = await prisma.booking.findMany({
+    where: { barberId },
+    include: { service: true, shop: true },
+    orderBy: { startTime: 'desc' },
+    take: 10,
+  })
+
+  const sum = (arr: { price: any; payAmount: any }[]) =>
+    arr.reduce((acc, x) => acc + amountOf(x), 0)
+
+  return NextResponse.json(
+    {
+      barberId,
+      date: d,
+
+      todayCount: todayCompleted.length,
+      todayAmount: Math.round(sum(todayCompleted)),
+
+      weekCount: weekCompleted.length,
+      weekAmount: Math.round(sum(weekCompleted)),
+
+      monthCount: monthCompleted.length,
+      monthAmount: Math.round(sum(monthCompleted)),
+
+      totalCount: totalCompleted.length,
+      totalAmount: Math.round(sum(totalCompleted)),
+
+      recentBookings: recent.map((b) => ({
+        id: b.id,
+        startTime: b.startTime,
+        status: b.status,
+        userName: b.userName,
+        phone: b.phone,
+        serviceName: b.service?.name ?? '',
+        shopName: b.shop?.name ?? '',
+        amount: Number(b.payAmount ?? b.price ?? 0),
+      })),
+    },
+    { headers: { 'Cache-Control': 'no-store, max-age=0' } }
+  )
 }

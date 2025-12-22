@@ -1,65 +1,64 @@
 // app/api/barber/today/route.ts
-import { NextRequest, NextResponse } from 'next/server'
+import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 
-function getCNDateStr() {
-  // 生成中国时区 YYYY-MM-DD，避免凌晨跨天拿到昨天（UTC坑）
-  return new Intl.DateTimeFormat('en-CA', {
-    timeZone: 'Asia/Shanghai',
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).format(new Date())
+function cnDateString(date = new Date()) {
+  // 返回 Asia/Shanghai 的 YYYY-MM-DD
+  try {
+    return new Intl.DateTimeFormat('sv-SE', {
+      timeZone: 'Asia/Shanghai',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date)
+  } catch {
+    // fallback：强行 +08:00
+    const ms = date.getTime() + 8 * 60 * 60 * 1000
+    return new Date(ms).toISOString().slice(0, 10)
+  }
 }
 
 function getDayRangeCN(dateStr?: string) {
-  const d = dateStr || getCNDateStr()
+  const d =
+    dateStr && /^\d{4}-\d{2}-\d{2}$/.test(dateStr) ? dateStr : cnDateString()
+
+  // 用 +08:00 计算当天范围，避免服务器时区导致“跨天”
   const start = new Date(`${d}T00:00:00.000+08:00`)
   const end = new Date(`${d}T23:59:59.999+08:00`)
   return { d, start, end }
 }
 
-// 输出也顺手做个统一（避免库里历史数据有 pending/scheduled）
-function normalizeStatusOut(s: any) {
-  const raw = String(s || '')
-  const up = raw.toUpperCase()
-  if (raw === 'pending' || raw === 'scheduled' || up === 'PENDING' || up === 'SCHEDULED') return 'BOOKED'
-  if (raw === 'cancelled' || up === 'CANCELLED') return 'CANCELED'
-  if (up === 'DONE') return 'COMPLETED'
-  return up || 'BOOKED'
-}
+export async function GET(request: Request) {
+  const { searchParams } = new URL(request.url)
+  const barberId = Number(searchParams.get('barberId') || 0)
+  const date = searchParams.get('date') || undefined
 
-export async function GET(req: NextRequest) {
-  try {
-    const { searchParams } = new URL(req.url)
-    const barberId = Number(searchParams.get('barberId') || 0)
-    const date = searchParams.get('date') || undefined // YYYY-MM-DD 可选
+  if (!barberId) {
+    return NextResponse.json({ error: 'barberId is required' }, { status: 400 })
+  }
 
-    if (!barberId) {
-      return NextResponse.json({ error: 'barberId is required' }, { status: 400 })
-    }
+  const { d, start, end } = getDayRangeCN(date)
 
-    const { d, start, end } = getDayRangeCN(date)
+  const bookings = await prisma.booking.findMany({
+    where: {
+      barberId,
+      startTime: { gte: start, lte: end },
+    },
+    include: { service: true, shop: true },
+    orderBy: { startTime: 'asc' },
+  })
 
-    const bookings = await prisma.booking.findMany({
-      where: {
-        barberId,
-        startTime: { gte: start, lte: end },
-      },
-      include: { service: true, shop: true },
-      orderBy: { startTime: 'asc' },
-    })
-
-    const res = NextResponse.json({
+  return NextResponse.json(
+    {
       barberId,
       date: d,
       bookings: bookings.map((b) => ({
         id: b.id,
         startTime: b.startTime,
-        status: normalizeStatusOut(b.status),
+        status: b.status,
         userName: b.userName,
         phone: b.phone,
         serviceName: b.service?.name ?? '',
@@ -67,15 +66,11 @@ export async function GET(req: NextRequest) {
         price: Number(b.price ?? b.payAmount ?? 0),
         payStatus: b.payStatus,
       })),
-    })
-
-    // 强制不缓存（避免你看到“昨天”还在）
-    res.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate')
-    res.headers.set('Pragma', 'no-cache')
-    res.headers.set('Expires', '0')
-    return res
-  } catch (e: any) {
-    console.error('GET /api/barber/today error', e)
-    return NextResponse.json({ error: 'internal error', detail: String(e) }, { status: 500 })
-  }
+    },
+    {
+      headers: {
+        'Cache-Control': 'no-store, max-age=0',
+      },
+    }
+  )
 }

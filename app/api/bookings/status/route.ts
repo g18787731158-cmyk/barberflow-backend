@@ -8,6 +8,9 @@ export const revalidate = 0
 // ✅ 你要更严格的话，把这个改成 true：必须先 ARRIVED 才能 COMPLETED
 const MUST_ARRIVE_BEFORE_COMPLETE = false
 
+// ✅ 允许修改最近 N 天（含今天）
+const EDITABLE_DAYS = 3
+
 const ALLOWED = new Set(['BOOKED', 'ARRIVED', 'COMPLETED', 'NO_SHOW', 'CANCELED'])
 
 function normalizeStatusIn(raw: any) {
@@ -21,6 +24,27 @@ function normalizeStatusIn(raw: any) {
   if (up === 'ARRIVED') return 'ARRIVED'
   if (up === 'NO_SHOW' || up === 'NOSHOW') return 'NO_SHOW'
   return up
+}
+
+// ---- CN(UTC+8) 时间工具：保证“按中国日期”判断 ----
+function cnDateStr(date = new Date()) {
+  const utc8 = new Date(date.getTime() + 8 * 60 * 60 * 1000)
+  return utc8.toISOString().slice(0, 10) // YYYY-MM-DD
+}
+
+function cnStartOfDay(dateStr: string) {
+  return new Date(`${dateStr}T00:00:00.000+08:00`)
+}
+
+function cnEndOfDay(dateStr: string) {
+  return new Date(`${dateStr}T23:59:59.999+08:00`)
+}
+
+function shiftCnDateStr(dateStr: string, deltaDays: number) {
+  const base = cnStartOfDay(dateStr)
+  const shifted = new Date(base.getTime() + deltaDays * 24 * 60 * 60 * 1000)
+  const utc8 = new Date(shifted.getTime() + 8 * 60 * 60 * 1000)
+  return utc8.toISOString().slice(0, 10)
 }
 
 // POST /api/bookings/status
@@ -48,13 +72,39 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const existing = await prisma.booking.findUnique({ where: { id }, select: { id: true, status: true } })
+    const existing = await prisma.booking.findUnique({
+      where: { id },
+      select: { id: true, status: true, startTime: true },
+    })
     if (!existing) {
       return NextResponse.json({ success: false, message: `未找到 id=${id} 的预约` }, { status: 404 })
     }
 
+    // ✅ 最近 3 天可改（含今天）
+    const today = cnDateStr()
+    const startStr = shiftCnDateStr(today, -(EDITABLE_DAYS - 1)) // 3天 => today-2
+    const allowedStart = cnStartOfDay(startStr).getTime()
+    const allowedEnd = cnEndOfDay(today).getTime()
+    const bookingTime = new Date(existing.startTime).getTime()
+
+    if (bookingTime < allowedStart || bookingTime > allowedEnd) {
+      const res = NextResponse.json(
+        { success: false, message: `仅允许修改最近${EDITABLE_DAYS}天的预约（${startStr} ~ ${today}）` },
+        { status: 403 }
+      )
+      res.headers.set('Cache-Control', 'no-store')
+      return res
+    }
+
+    // 状态没变，直接成功
+    const cur = normalizeStatusIn(existing.status)
+    if (cur === status) {
+      const res = NextResponse.json({ success: true, booking: { id: existing.id, status: cur } }, { status: 200 })
+      res.headers.set('Cache-Control', 'no-store')
+      return res
+    }
+
     if (MUST_ARRIVE_BEFORE_COMPLETE && status === 'COMPLETED') {
-      const cur = normalizeStatusIn(existing.status)
       if (cur !== 'ARRIVED') {
         return NextResponse.json(
           { success: false, message: '必须先标记到店(ARRIVED)才能完成(COMPLETED)' },
