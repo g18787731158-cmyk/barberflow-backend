@@ -58,6 +58,7 @@ model booking {
   barber      barber    @relation(fields: [barberId], references: [id], map: "Booking_barberId_fkey")
   service     service   @relation(fields: [serviceId], references: [id], map: "Booking_serviceId_fkey")
   shop        shop      @relation(fields: [shopId], references: [id], map: "Booking_shopId_fkey")
+  ledger      ledger[]
 
   @@unique([barberId, startTime], map: "Booking_barberId_startTime_key")
   @@index([barberId], map: "Booking_barberId_idx")
@@ -93,4 +94,20 @@ model shop {
   enableAutoSplit    Boolean   @default(false)
   barber             barber[]
   booking            booking[]
+}
+
+model ledger {
+  id        Int      @id @default(autoincrement())
+  bookingId Int
+  type      String // SETTLE / REFUND / ADJUST ...
+  amount    Int
+  status    String   @default("CREATED") // CREATED / SUCCESS / FAILED ...
+  detail    String?
+  createdAt DateTime @default(now())
+
+  booking booking @relation(fields: [bookingId], references: [id], map: "Ledger_bookingId_fkey")
+
+  @@unique([bookingId, type], map: "Ledger_bookingId_type_key") // ✅ 幂等：同一单同一种流水只会有一条
+  @@index([bookingId], map: "Ledger_bookingId_idx")
+  @@map("ledger_entries")
 }
