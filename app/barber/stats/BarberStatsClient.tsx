@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { STATUS, normStatus, isCancelled } from '@/lib/status'
+import { STATUS, canonStatus } from '@/lib/status'
 
 type StatPack = {
   todayCount: number
@@ -62,7 +62,7 @@ export default function BarberStatsClient() {
       try {
         const res = await fetch(
           `/api/barbers/stats?barberId=${barberId}&date=${encodeURIComponent(date)}`,
-          { cache: 'no-store' }
+          { cache: 'no-store' },
         )
         const json = await res.json()
 
@@ -99,14 +99,20 @@ export default function BarberStatsClient() {
           typeof b.price === 'number'
             ? b.price
             : typeof b.payAmount === 'number'
-            ? b.payAmount
-            : typeof b.service?.price === 'number'
-            ? b.service.price
-            : 0
+              ? b.payAmount
+              : typeof b.service?.price === 'number'
+                ? b.service.price
+                : 0
 
-        const st = normStatus(b.status)
+        const st = canonStatus(b.status)
         const statusText =
-          st === STATUS.COMPLETED ? '已完成' : isCancelled(b.status) ? '已取消' : st === STATUS.CONFIRMED ? '已确认' : '已预约'
+          st === STATUS.COMPLETED
+            ? '已完成'
+            : st === STATUS.CANCELLED
+              ? '已取消'
+              : st === STATUS.CONFIRMED
+                ? '已确认'
+                : '已预约'
 
         return {
           id: b.id,

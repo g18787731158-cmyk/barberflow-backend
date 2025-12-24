@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { STATUS, normStatus, isCancelled } from '@/lib/status'
+import { STATUS, canonStatus } from '@/lib/status'
+
+export const runtime = 'nodejs'
 
 export async function GET(_req: NextRequest) {
   const now = new Date()
@@ -9,9 +11,14 @@ export async function GET(_req: NextRequest) {
 
   const todays = await prisma.booking.findMany({
     where: {
-      startTime: { gte: startOfDay, lte: endOfDay },
+      startTime: {
+        gte: startOfDay,
+        lte: endOfDay,
+      },
     },
-    include: { service: true },
+    include: {
+      service: true,
+    },
   })
 
   let total = 0
@@ -27,18 +34,18 @@ export async function GET(_req: NextRequest) {
   for (const b of todays) {
     total += 1
 
-    const st = normStatus(b.status)
+    const st = canonStatus(b.status)
 
-    if (st === STATUS.COMPLETED) completed += 1
-    else if (isCancelled(b.status)) cancelled += 1
-    else if (st === STATUS.SCHEDULED || st === STATUS.CONFIRMED) scheduled += 1
+    if (st === STATUS.SCHEDULED) scheduled += 1
+    else if (st === STATUS.COMPLETED) completed += 1
+    else if (st === STATUS.CANCELLED) cancelled += 1
 
-    const src = (b.source || '').toLowerCase()
+    const src = String(b.source || '').toLowerCase()
     if (src === 'miniapp') miniapp += 1
     else if (src === 'web') web += 1
     else other += 1
 
-    // 营业额：只算已完成（✅ 大写）
+    // 只算已完成的营业额
     if (st === STATUS.COMPLETED && b.service) {
       revenue += b.service.price || 0
     }
@@ -54,10 +61,6 @@ export async function GET(_req: NextRequest) {
     cancelled,
     effective,
     revenue,
-    bySource: {
-      miniapp,
-      web,
-      other,
-    },
+    bySource: { miniapp, web, other },
   })
 }

@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { STATUS, normStatus, isCancelled } from '@/lib/status'
+import { STATUS, canonStatus } from '@/lib/status'
 
 type Barber = { id: number; name: string }
 type BookingItem = {
@@ -57,13 +57,13 @@ export default function BarberTodayPage() {
       const price = Number(b.price || 0)
       totalAmount += price
 
-      const st = normStatus(b.status)
+      const st = canonStatus(b.status)
       if (st === STATUS.COMPLETED) {
         completedCount += 1
         completedAmount += price
       } else if (st === STATUS.SCHEDULED || st === STATUS.CONFIRMED) {
         scheduledCount += 1
-      } else if (isCancelled(b.status)) {
+      } else if (st === STATUS.CANCELLED) {
         cancelledCount += 1
       }
     }
@@ -226,19 +226,19 @@ export default function BarberTodayPage() {
 
           {!loading &&
             bookings.map((b) => {
-              const st = normStatus(b.status)
+              const st = canonStatus(b.status)
               const canComplete = st === STATUS.SCHEDULED || st === STATUS.CONFIRMED
 
               const statusText =
                 st === STATUS.COMPLETED
                   ? '已完成'
-                  : isCancelled(b.status)
-                  ? '已取消'
-                  : st === STATUS.CONFIRMED
-                  ? '已确认'
-                  : st === STATUS.SCHEDULED
-                  ? '已预约'
-                  : b.status
+                  : st === STATUS.CANCELLED
+                    ? '已取消'
+                    : st === STATUS.CONFIRMED
+                      ? '已确认'
+                      : st === STATUS.SCHEDULED
+                        ? '已预约'
+                        : String(b.status || '')
 
               return (
                 <div
