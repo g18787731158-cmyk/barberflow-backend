@@ -33,15 +33,16 @@ function parseId(v: unknown): number | null {
 export async function POST(req: Request) {
   const body = await readJson(req)
   if (!body) {
-    return NextResponse.json({ error: '请求体必须是 JSON 对象' }, { status: 400 })
+    return NextResponse.json({ ok: false, error: '请求体必须是 JSON 对象' }, { status: 400 })
   }
 
   const bookingId = parseId(body.id ?? body.bookingId)
   if (!bookingId) {
-    return NextResponse.json({ error: '缺少预约 id' }, { status: 400 })
+    return NextResponse.json({ ok: false, error: '缺少预约 id' }, { status: 400 })
   }
 
   const now = new Date()
+  const COMPLETED = 'COMPLETED' as BookingStatus
 
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -49,13 +50,13 @@ export async function POST(req: Request) {
         where: { id: bookingId },
         select: { id: true, status: true, completedAt: true },
       })
-
       if (!existing) return { notFound: true as const }
 
-      const cur = String(existing.status ?? '').toUpperCase()
+      const cur = String(existing.status ?? '')
+      const curUpper = cur.toUpperCase()
 
       // ✅ 已完成：只补 completedAt（不覆盖已有时间）
-      if (cur === 'COMPLETED') {
+      if (curUpper === 'COMPLETED') {
         if (existing.completedAt) {
           const booking = await tx.booking.findUnique({
             where: { id: bookingId },
@@ -72,11 +73,11 @@ export async function POST(req: Request) {
         return { changed: true as const, booking }
       }
 
-      // 未完成：置完成 + 写 completedAt
+      // 未完成：置完成 + 写 completedAt（如已有 completedAt 则保留）
       const booking = await tx.booking.update({
         where: { id: bookingId },
         data: {
-          status: 'COMPLETED' as unknown as BookingStatus,
+          status: COMPLETED,
           completedAt: existing.completedAt ?? now,
         },
         include: { service: true },
@@ -86,13 +87,13 @@ export async function POST(req: Request) {
     })
 
     if ((result as { notFound?: true }).notFound) {
-      return NextResponse.json({ error: '预约不存在' }, { status: 404 })
+      return NextResponse.json({ ok: false, error: '预约不存在' }, { status: 404 })
     }
 
     const ok = result as { booking: unknown; changed: boolean }
-    return NextResponse.json({ booking: ok.booking, changed: ok.changed })
+    return NextResponse.json({ ok: true, changed: ok.changed, booking: ok.booking })
   } catch (e) {
     console.error('[complete] error:', e)
-    return NextResponse.json({ error: '操作失败，请稍后再试' }, { status: 500 })
+    return NextResponse.json({ ok: false, error: '操作失败，请稍后再试' }, { status: 500 })
   }
 }
