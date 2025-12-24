@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
+import { STATUS, normStatus, isCancelled } from '@/lib/status'
 
 type StatPack = {
   todayCount: number
@@ -103,8 +104,9 @@ export default function BarberStatsClient() {
             ? b.service.price
             : 0
 
+        const st = normStatus(b.status)
         const statusText =
-          b.status === 'completed' ? '已完成' : b.status === 'cancelled' ? '已取消' : '已预约'
+          st === STATUS.COMPLETED ? '已完成' : isCancelled(b.status) ? '已取消' : st === STATUS.CONFIRMED ? '已确认' : '已预约'
 
         return {
           id: b.id,
@@ -138,7 +140,6 @@ export default function BarberStatsClient() {
         </div>
       </div>
 
-      {/* 四宫格 */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 12 }}>
         {[
           { title: '今日完成', count: s.todayCount, amount: s.todayAmount },
@@ -165,17 +166,11 @@ export default function BarberStatsClient() {
         ))}
       </div>
 
-      {/* 状态区 */}
       <div style={{ marginTop: 16 }}>
-        {loading && (
-          <div style={{ padding: 16, textAlign: 'center', color: '#9ca3af' }}>加载中…</div>
-        )}
-        {!loading && err && (
-          <div style={{ padding: 16, textAlign: 'center', color: '#b91c1c' }}>{err}</div>
-        )}
+        {loading && <div style={{ padding: 16, textAlign: 'center', color: '#9ca3af' }}>加载中…</div>}
+        {!loading && err && <div style={{ padding: 16, textAlign: 'center', color: '#b91c1c' }}>{err}</div>}
       </div>
 
-      {/* 最近预约 */}
       <div style={{ marginTop: 8 }}>
         <div style={{ fontSize: 13, color: '#4b5563', margin: '10px 0' }}>最近预约（最多 10 条）</div>
 

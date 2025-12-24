@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { STATUS, normStatus, isCancelled } from '@/lib/status'
 
 type Barber = { id: number; name: string }
 type BookingItem = {
@@ -34,7 +35,7 @@ function formatTime(iso: string) {
 export default function BarberTodayPage() {
   const [date, setDate] = useState(todayStr())
   const [barbers, setBarbers] = useState<Barber[]>([])
-  const [barberId, setBarberId] = useState<number>(1) // ✅ 老郭默认 1
+  const [barberId, setBarberId] = useState<number>(1)
   const [loading, setLoading] = useState(false)
   const [bookings, setBookings] = useState<BookingItem[]>([])
   const [err, setErr] = useState<string>('')
@@ -55,12 +56,14 @@ export default function BarberTodayPage() {
     for (const b of bookings) {
       const price = Number(b.price || 0)
       totalAmount += price
-      if (b.status === 'completed') {
+
+      const st = normStatus(b.status)
+      if (st === STATUS.COMPLETED) {
         completedCount += 1
         completedAmount += price
-      } else if (b.status === 'scheduled') {
+      } else if (st === STATUS.SCHEDULED || st === STATUS.CONFIRMED) {
         scheduledCount += 1
-      } else if (b.status === 'cancelled') {
+      } else if (isCancelled(b.status)) {
         cancelledCount += 1
       }
     }
@@ -82,12 +85,11 @@ export default function BarberTodayPage() {
       const list: Barber[] = data?.barbers || data || []
       setBarbers(list)
 
-      // 如果列表里有 id=1 就保留，否则默认第一个
       if (list.length && !list.some((b) => b.id === barberId)) {
         setBarberId(list[0].id)
       }
     } catch {
-      // 不影响主流程
+      // ignore
     }
   }
 
@@ -161,7 +163,6 @@ export default function BarberTodayPage() {
           </div>
         </div>
 
-        {/* 选择区 */}
         <div style={{ display: 'flex', gap: 12, marginTop: 16, flexWrap: 'wrap' }}>
           <div style={{ background: '#121214', border: '1px solid #1f2226', borderRadius: 12, padding: 12 }}>
             <div style={{ fontSize: 12, color: '#9aa0a6', marginBottom: 6 }}>理发师</div>
@@ -177,7 +178,6 @@ export default function BarberTodayPage() {
                 outline: 'none',
               }}
             >
-              {/* 即使没拉到列表，也至少保证 1 可选 */}
               {!barbers.length && <option value={1}>老郭（1）</option>}
               {barbers.map((b) => (
                 <option key={b.id} value={b.id}>
@@ -219,7 +219,6 @@ export default function BarberTodayPage() {
           </div>
         </div>
 
-        {/* 内容 */}
         <div style={{ marginTop: 18 }}>
           {loading && <div style={{ color: '#9aa0a6', padding: 16 }}>加载中…</div>}
           {!!err && !loading && <div style={{ color: '#ffb4b4', padding: 16 }}>{err}</div>}
@@ -227,9 +226,19 @@ export default function BarberTodayPage() {
 
           {!loading &&
             bookings.map((b) => {
-              const canComplete = b.status === 'scheduled'
+              const st = normStatus(b.status)
+              const canComplete = st === STATUS.SCHEDULED || st === STATUS.CONFIRMED
+
               const statusText =
-                b.status === 'completed' ? '已完成' : b.status === 'cancelled' ? '已取消' : b.status === 'scheduled' ? '已预约' : b.status
+                st === STATUS.COMPLETED
+                  ? '已完成'
+                  : isCancelled(b.status)
+                  ? '已取消'
+                  : st === STATUS.CONFIRMED
+                  ? '已确认'
+                  : st === STATUS.SCHEDULED
+                  ? '已预约'
+                  : b.status
 
               return (
                 <div

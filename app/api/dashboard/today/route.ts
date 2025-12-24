@@ -1,45 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { STATUS, normStatus, isCancelled } from '@/lib/status'
 
 export async function GET(_req: NextRequest) {
   const now = new Date()
-  const startOfDay = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    0,
-    0,
-    0,
-    0
-  )
-  const endOfDay = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    23,
-    59,
-    59,
-    999
-  )
+  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
+  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
 
-  // 把 service 一起查出来，好算营业额
   const todays = await prisma.booking.findMany({
     where: {
-      startTime: {
-        gte: startOfDay,
-        lte: endOfDay,
-      },
+      startTime: { gte: startOfDay, lte: endOfDay },
     },
-    include: {
-      service: true,
-    },
+    include: { service: true },
   })
 
   let total = 0
   let scheduled = 0
   let completed = 0
   let cancelled = 0
-  let revenue = 0 // 今日营业额（单位：元）
+  let revenue = 0
 
   let miniapp = 0
   let web = 0
@@ -48,16 +27,19 @@ export async function GET(_req: NextRequest) {
   for (const b of todays) {
     total += 1
 
-    if (b.status === 'scheduled') scheduled += 1
-    else if (b.status === 'completed') completed += 1
-    else if (b.status === 'cancelled') cancelled += 1
+    const st = normStatus(b.status)
 
-    if (b.source === 'miniapp') miniapp += 1
-    else if (b.source === 'web') web += 1
+    if (st === STATUS.COMPLETED) completed += 1
+    else if (isCancelled(b.status)) cancelled += 1
+    else if (st === STATUS.SCHEDULED || st === STATUS.CONFIRMED) scheduled += 1
+
+    const src = (b.source || '').toLowerCase()
+    if (src === 'miniapp') miniapp += 1
+    else if (src === 'web') web += 1
     else other += 1
 
-    // 营业额：只算已完成的单
-    if (b.status === 'completed' && b.service) {
+    // 营业额：只算已完成（✅ 大写）
+    if (st === STATUS.COMPLETED && b.service) {
       revenue += b.service.price || 0
     }
   }
@@ -65,7 +47,7 @@ export async function GET(_req: NextRequest) {
   const effective = total - cancelled
 
   return NextResponse.json({
-    date: startOfDay.toISOString().slice(0, 10), // YYYY-MM-DD
+    date: startOfDay.toISOString().slice(0, 10),
     total,
     scheduled,
     completed,
