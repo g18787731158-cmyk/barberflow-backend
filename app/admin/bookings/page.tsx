@@ -53,7 +53,7 @@ function formatMoney(amount: number) {
 function generateTimeSlots() {
   const slots: string[] = []
   for (let h = 10; h <= 21; h++) {
-    for (let m of [0, 30]) {
+    for (const m of [0, 30]) {
       if (h === 21 && m === 30) continue
       const hh = h.toString().padStart(2, '0')
       const mm = m.toString().padStart(2, '0')

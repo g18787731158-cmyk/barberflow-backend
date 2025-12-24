@@ -19,7 +19,7 @@ export async function PATCH(
   let body: any
   try {
     body = await request.json()
-  } catch (err) {
+  } catch (_err) {
     return NextResponse.json(
       { error: '请求体必须是 JSON' },
       { status: 400 },
