@@ -79,8 +79,8 @@ if echo "${CHANGED_FILES}" | grep -Eq '(^|/)(package-lock\.json|package\.json)$'
   NEED_NPM_CI=1
 fi
 
-# prisma schema 改了 => prisma generate
-if echo "${CHANGED_FILES}" | grep -Eq '(^|/)prisma/schema\.prisma$'; then
+# prisma 相关变更 => prisma generate
+if echo "${CHANGED_FILES}" | grep -Eq "(^|/)prisma/(schema\.prisma|migrations/)|(^|/)prisma\.config\.ts$"; then
   NEED_PRISMA_GENERATE=1
 fi
 
