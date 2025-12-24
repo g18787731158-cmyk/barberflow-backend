@@ -45,6 +45,7 @@ model booking {
   serviceId   Int
   startTime   DateTime
   status      String    @default("scheduled")
+  completedAt DateTime?
   source      String?
   price       Int?
   payStatus   String    @default("unpaid")
