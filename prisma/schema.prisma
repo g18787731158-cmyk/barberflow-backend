@@ -44,7 +44,7 @@ model booking {
   barberId    Int
   serviceId   Int
   startTime   DateTime
-  status      String    @default("scheduled")
+  status      String    @default("SCHEDULED")
   completedAt DateTime?
   note String?
   source      String?
