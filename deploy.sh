@@ -73,14 +73,21 @@ echo "${CHANGED_FILES}" | sed -n '1,200p' || true
 
 NEED_NPM_CI=0
 NEED_PRISMA_GENERATE=0
+NEED_PRISMA_MIGRATE=0
 
 # package/lock 改了 => npm ci
 if echo "${CHANGED_FILES}" | grep -Eq '(^|/)(package-lock\.json|package\.json)$'; then
   NEED_NPM_CI=1
 fi
 
-# prisma 相关变更 => prisma generate
-if echo "${CHANGED_FILES}" | grep -Eq "(^|/)prisma/(schema\.prisma|migrations/)|(^|/)prisma\.config\.ts$"; then
+# prisma migrations 变更 => migrate deploy + generate
+if echo "${CHANGED_FILES}" | grep -Eq "(^|/)prisma/migrations/"; then
+  NEED_PRISMA_MIGRATE=1
+  NEED_PRISMA_GENERATE=1
+fi
+
+# prisma schema/config 变更 => generate
+if echo "${CHANGED_FILES}" | grep -Eq "(^|/)prisma/schema\.prisma$|(^|/)prisma\.config\.ts$"; then
   NEED_PRISMA_GENERATE=1
 fi
 
@@ -106,6 +113,37 @@ if [ "${NEED_NPM_CI}" -eq 1 ]; then
   NEED_PRISMA_GENERATE=1
 else
   echo "==> skip npm ci"
+fi
+
+load_env_for_prisma() {
+  local env_file=""
+  if [ -f .env.production ]; then
+    env_file=".env.production"
+  elif [ -f .env ]; then
+    env_file=".env"
+  fi
+
+  if [ -n "${env_file}" ]; then
+    echo "==> load env from ${env_file}"
+    set -a
+    # shellcheck disable=SC1090
+    source "${env_file}"
+    set +a
+  else
+    echo "==> no .env.production/.env found, skip env load"
+  fi
+}
+
+if [ "${NEED_PRISMA_MIGRATE}" -eq 1 ]; then
+  echo "==> prisma migrate deploy"
+  load_env_for_prisma
+  if [ -z "${DATABASE_URL:-}" ]; then
+    echo "❌ DATABASE_URL is missing. Put it in .env.production (recommended) or export it in the shell."
+    exit 1
+  fi
+  npx prisma migrate deploy
+else
+  echo "==> skip prisma migrate deploy"
 fi
 
 if [ "${NEED_PRISMA_GENERATE}" -eq 1 ]; then
