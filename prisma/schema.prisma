@@ -3,8 +3,9 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
-  url      = env("DATABASE_URL")
+  provider          = "mysql"
+  url               = env("DATABASE_URL")
+  shadowDatabaseUrl = env("SHADOW_DATABASE_URL")
 }
 
 model barber {
@@ -45,6 +46,7 @@ model booking {
   serviceId   Int
   startTime   DateTime
   status      String    @default("SCHEDULED")
+  slotLock String? @db.VarChar(8) @default(dbgenerated())
   completedAt DateTime?
   note String?
   source      String?
@@ -62,7 +64,7 @@ model booking {
   shop        shop      @relation(fields: [shopId], references: [id], map: "Booking_shopId_fkey")
   ledger      ledger[]
 
-  @@unique([barberId, startTime], map: "Booking_barberId_startTime_key")
+  @@unique([barberId, startTime, slotLock], map: "Booking_barberId_startTime_slotLock_key")
   @@index([barberId], map: "Booking_barberId_idx")
   @@index([phone], map: "Booking_phone_idx")
   @@index([serviceId], map: "Booking_serviceId_idx")
