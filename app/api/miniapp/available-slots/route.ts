@@ -38,14 +38,12 @@ export async function GET(req: NextRequest) {
 
     const { start: dayStart, end: dayEnd, slotsStart, slotsEnd } = buildDayRange(dateStr)
 
-    // ✅ 关键：排除所有“取消”历史值（新旧大小写都排）
-    const CANCELLED_VALUES = ['CANCELLED', 'CANCELED', 'cancelled', 'canceled', 'CANCEL', 'cancel']
-
+    // ✅ 只查“仍在占用时段”的预约（slotLock=true）
     const bookings = await prisma.booking.findMany({
       where: {
         barberId,
         startTime: { gte: dayStart, lt: dayEnd },
-        status: { notIn: CANCELLED_VALUES },
+        slotLock: true,
       },
       include: {
         service: { select: { durationMinutes: true } },

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { STATUS, canonStatus, type CanonStatus } from '@/lib/status'
+import { STATUS, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -28,95 +28,59 @@ function parseId(v: unknown): number | null {
   return null
 }
 
-function toTargetStatus(v: unknown): CanonStatus | null {
-  const c = canonStatus(v)
-  if (c === 'UNKNOWN') return null
-  // 只允许写入这四种
-  if (
-    c === STATUS.SCHEDULED ||
-    c === STATUS.CONFIRMED ||
-    c === STATUS.COMPLETED ||
-    c === STATUS.CANCELLED
-  ) {
-    return c
-  }
-  return null
-}
-
 export async function POST(req: Request) {
   const body = await readJson(req)
   if (!body) {
-    return NextResponse.json({ error: '请求体必须是 JSON 对象' }, { status: 400 })
+    return NextResponse.json({ ok: false, error: '请求体必须是 JSON 对象' }, { status: 400 })
   }
 
-  const bookingId = parseId(body.id ?? body.bookingId)
-  if (!bookingId) {
-    return NextResponse.json({ error: '缺少有效的预约 ID' }, { status: 400 })
-  }
+  const id = parseId(body.id)
+  const rawStatus = String(body.status || '')
+  if (!id) return NextResponse.json({ ok: false, error: '缺少预约 id' }, { status: 400 })
+  if (!rawStatus) return NextResponse.json({ ok: false, error: '缺少 status' }, { status: 400 })
 
-  const target = toTargetStatus(body.status)
-  if (!target) {
-    return NextResponse.json(
-      { error: '无效的预约状态', allowed: Object.values(STATUS) },
-      { status: 400 },
-    )
-  }
-
+  const next = canonStatus(rawStatus) // ✅ 统一大写/兼容旧值
   const now = new Date()
 
+  const isCancel = next === STATUS.CANCELLED
+  const isComplete = next === STATUS.COMPLETED
+
   try {
-    const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.booking.findUnique({
-        where: { id: bookingId },
-        select: { id: true, status: true, completedAt: true, updatedAt: true },
+    const updated = await prisma.$transaction(async (tx) => {
+      const cur = await tx.booking.findUnique({
+        where: { id },
+        select: { id: true, status: true, completedAt: true, slotLock: true },
       })
-      if (!existing) return { notFound: true as const }
+      if (!cur) return null
 
-      const curCanon = canonStatus(existing.status)
+      const data: any = {
+        status: next,
+        // ✅ 取消：解锁（写 NULL，允许无限次取消/重约）
+        slotLock: isCancel ? null : true,
+      }
 
-      // 目标 completedAt 规则：
-      // - COMPLETED：若已有 completedAt 则保持；否则补 now
-      // - 其它状态：completedAt 强制为 null
-      const nextCompletedAt =
-        target === STATUS.COMPLETED ? (existing.completedAt ?? now) : null
-
-      // ✅ 幂等判断（注意：Date 不能用 === 比较）
-      const statusSame = curCanon === target
-      const completedAtSame =
-        (existing.completedAt === null && nextCompletedAt === null) ||
-        (existing.completedAt !== null && nextCompletedAt !== null)
-
-      // 如果状态一致，且：
-      // - COMPLETED 情况下已有 completedAt
-      // - 非 COMPLETED 情况下 completedAt 已是 null
-      if (statusSame && completedAtSame) {
-        if (target === STATUS.COMPLETED) {
-          if (existing.completedAt) return { changed: false as const, booking: existing }
-        } else {
-          if (existing.completedAt === null) return { changed: false as const, booking: existing }
-        }
+      // ✅ 完成：补写 completedAt（幂等）
+      if (isComplete) {
+        data.completedAt = cur.completedAt ?? now
+        data.slotLock = true
       }
 
       const booking = await tx.booking.update({
-        where: { id: bookingId },
-        data: {
-          status: target,
-          completedAt: nextCompletedAt,
-        },
-        select: { id: true, status: true, completedAt: true, updatedAt: true },
+        where: { id },
+        data,
+        include: { shop: true, barber: true, service: true },
       })
 
-      return { changed: true as const, booking }
+      return booking
     })
 
-    if ((result as { notFound?: true }).notFound) {
-      return NextResponse.json({ error: '预约不存在' }, { status: 404 })
+    if (!updated) {
+      return NextResponse.json({ ok: false, error: '预约不存在' }, { status: 404 })
     }
 
-    const ok = result as { changed: boolean; booking: unknown }
-    return NextResponse.json({ ok: true, changed: ok.changed, booking: ok.booking })
-  } catch (e) {
-    console.error('POST /api/admin/bookings/update-status error:', e)
-    return NextResponse.json({ error: '更新预约状态失败' }, { status: 500 })
+    return NextResponse.json({ ok: true, booking: updated })
+  } catch (e: any) {
+    console.error('[admin/update-status] error:', e)
+    return NextResponse.json({ ok: false, error: '更新失败', code: e?.code || null }, { status: 500 })
   }
 }

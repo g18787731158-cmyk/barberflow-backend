@@ -46,9 +46,12 @@ model booking {
   serviceId   Int
   startTime   DateTime
   status      String    @default("SCHEDULED")
-  slotLock String? @db.VarChar(8) @default(dbgenerated())
+
+  /// ✅ 占用锁：true = 占用时段；NULL = 不占用（取消后写 NULL）
+  slotLock    Boolean?  @default(true)
+
   completedAt DateTime?
-  note String?
+  note        String?
   source      String?
   price       Int?
   payStatus   String    @default("unpaid")
@@ -59,12 +62,15 @@ model booking {
   splitDetail String?
   createdAt   DateTime  @default(now())
   updatedAt   DateTime  @updatedAt
+
   barber      barber    @relation(fields: [barberId], references: [id], map: "Booking_barberId_fkey")
   service     service   @relation(fields: [serviceId], references: [id], map: "Booking_serviceId_fkey")
   shop        shop      @relation(fields: [shopId], references: [id], map: "Booking_shopId_fkey")
   ledger      ledger[]
 
+  /// ✅ 关键：只允许“占用锁=true”的同一时段存在一条；取消后 slotLock=NULL 就不冲突
   @@unique([barberId, startTime, slotLock], map: "Booking_barberId_startTime_slotLock_key")
+
   @@index([barberId], map: "Booking_barberId_idx")
   @@index([phone], map: "Booking_phone_idx")
   @@index([serviceId], map: "Booking_serviceId_idx")
@@ -111,7 +117,7 @@ model ledger {
 
   booking booking @relation(fields: [bookingId], references: [id], map: "Ledger_bookingId_fkey")
 
-  @@unique([bookingId, type], map: "Ledger_bookingId_type_key") // ✅ 幂等：同一单同一种流水只会有一条
+  @@unique([bookingId, type], map: "Ledger_bookingId_type_key")
   @@index([bookingId], map: "Ledger_bookingId_idx")
   @@map("ledger_entries")
 }
