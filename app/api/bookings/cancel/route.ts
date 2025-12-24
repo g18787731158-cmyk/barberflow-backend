@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { STATUS, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -27,10 +28,6 @@ function parseId(v: unknown): number | null {
   return null
 }
 
-function normStatus(v: unknown): string {
-  return String(v ?? '').trim().toUpperCase()
-}
-
 // 取消预约（幂等 + 写入全大写 + 清 completedAt）
 export async function POST(req: Request) {
   const body = await readJson(req)
@@ -52,27 +49,38 @@ export async function POST(req: Request) {
 
       if (!existing) return { notFound: true as const }
 
-      const cur = normStatus(existing.status)
-      const alreadyCancelled = cur === 'CANCELLED' || cur === 'CANCELED'
+      const cur = canonStatus(existing.status)
 
-      // 幂等：已经取消，只保证 completedAt 为 null
-      if (alreadyCancelled) {
-        if (existing.completedAt === null) {
+      // ✅ 已完成不允许取消（防止完成/结算后被取消）
+      if (cur === STATUS.COMPLETED) {
+        return { conflict: true as const, booking: existing }
+      }
+
+      // ✅ 已取消：矫正状态为 CANCELLED，并确保 completedAt=null
+      if (cur === STATUS.CANCELLED) {
+        const needFixStatus = String(existing.status ?? '').trim().toUpperCase() !== STATUS.CANCELLED
+        const needFixCompletedAt = existing.completedAt !== null
+
+        if (!needFixStatus && !needFixCompletedAt) {
           return { changed: false as const, booking: existing }
         }
+
         const booking = await tx.booking.update({
           where: { id: bookingId },
-          data: { completedAt: null },
+          data: {
+            status: STATUS.CANCELLED,
+            completedAt: null,
+          },
           select: { id: true, status: true, completedAt: true, updatedAt: true },
         })
         return { changed: true as const, booking }
       }
 
-      // 非取消 -> 置 CANCELLED + 清 completedAt
+      // 其它状态 -> 置 CANCELLED + 清 completedAt
       const booking = await tx.booking.update({
         where: { id: bookingId },
         data: {
-          status: 'CANCELLED',
+          status: STATUS.CANCELLED,
           completedAt: null,
         },
         select: { id: true, status: true, completedAt: true, updatedAt: true },
@@ -83,6 +91,9 @@ export async function POST(req: Request) {
 
     if ((result as { notFound?: true }).notFound) {
       return NextResponse.json({ error: '预约不存在' }, { status: 404 })
+    }
+    if ((result as { conflict?: true }).conflict) {
+      return NextResponse.json({ error: '已完成的预约不可取消' }, { status: 409 })
     }
 
     const ok = result as { changed: boolean; booking: unknown }

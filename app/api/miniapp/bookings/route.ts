@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { STATUS } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -68,9 +69,10 @@ export async function POST(req: Request) {
         barberId,
         serviceId,
         startTime,
-        status: 'SCHEDULED',
+        status: STATUS.SCHEDULED,
         userName,
         phone,
+        source: 'miniapp',
       },
     })
 
@@ -78,7 +80,6 @@ export async function POST(req: Request) {
   } catch (e) {
     const code = (e as { code?: string }).code
     if (code === 'P2002') {
-      // 唯一键冲突：@@unique([barberId, startTime])
       return NextResponse.json({ ok: false, error: '该时段已被预约' }, { status: 409 })
     }
 

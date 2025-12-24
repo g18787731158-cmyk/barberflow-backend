@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { STATUS, canonStatus, type CanonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -27,28 +28,18 @@ function parseId(v: unknown): number | null {
   return null
 }
 
-const CANON = {
-  SCHEDULED: 'SCHEDULED',
-  CONFIRMED: 'CONFIRMED',
-  COMPLETED: 'COMPLETED',
-  CANCELLED: 'CANCELLED',
-} as const
-
-type CanonStatus = (typeof CANON)[keyof typeof CANON]
-
-function normalize(v: unknown): string {
-  return String(v ?? '').trim().toUpperCase()
-}
-
-function toCanonStatus(v: unknown): CanonStatus | null {
-  const s = normalize(v)
-  if (!s) return null
-
-  if (s === 'SCHEDULED') return CANON.SCHEDULED
-  if (s === 'CONFIRMED') return CANON.CONFIRMED
-  if (s === 'COMPLETED') return CANON.COMPLETED
-  if (s === 'CANCELLED' || s === 'CANCELED') return CANON.CANCELLED
-
+function toTargetStatus(v: unknown): CanonStatus | null {
+  const c = canonStatus(v)
+  if (c === 'UNKNOWN') return null
+  // 只允许写入这四种
+  if (
+    c === STATUS.SCHEDULED ||
+    c === STATUS.CONFIRMED ||
+    c === STATUS.COMPLETED ||
+    c === STATUS.CANCELLED
+  ) {
+    return c
+  }
   return null
 }
 
@@ -63,10 +54,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '缺少有效的预约 ID' }, { status: 400 })
   }
 
-  const target = toCanonStatus(body.status)
+  const target = toTargetStatus(body.status)
   if (!target) {
     return NextResponse.json(
-      { error: '无效的预约状态', allowed: Object.values(CANON) },
+      { error: '无效的预约状态', allowed: Object.values(STATUS) },
       { status: 400 },
     )
   }
@@ -81,16 +72,29 @@ export async function POST(req: Request) {
       })
       if (!existing) return { notFound: true as const }
 
-      const cur = normalize(existing.status)
-      const curCanon = toCanonStatus(cur) ?? cur
+      const curCanon = canonStatus(existing.status)
 
-      // 计算目标 completedAt
+      // 目标 completedAt 规则：
+      // - COMPLETED：若已有 completedAt 则保持；否则补 now
+      // - 其它状态：completedAt 强制为 null
       const nextCompletedAt =
-        target === CANON.COMPLETED ? (existing.completedAt ?? now) : null
+        target === STATUS.COMPLETED ? (existing.completedAt ?? now) : null
 
-      // 幂等：状态一致且 completedAt 已符合
-      if (curCanon === target && existing.completedAt === nextCompletedAt) {
-        return { changed: false as const, booking: existing }
+      // ✅ 幂等判断（注意：Date 不能用 === 比较）
+      const statusSame = curCanon === target
+      const completedAtSame =
+        (existing.completedAt === null && nextCompletedAt === null) ||
+        (existing.completedAt !== null && nextCompletedAt !== null)
+
+      // 如果状态一致，且：
+      // - COMPLETED 情况下已有 completedAt
+      // - 非 COMPLETED 情况下 completedAt 已是 null
+      if (statusSame && completedAtSame) {
+        if (target === STATUS.COMPLETED) {
+          if (existing.completedAt) return { changed: false as const, booking: existing }
+        } else {
+          if (existing.completedAt === null) return { changed: false as const, booking: existing }
+        }
       }
 
       const booking = await tx.booking.update({
