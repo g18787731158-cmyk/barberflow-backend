@@ -1,10 +1,9 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import type { booking as BookingModel } from '@prisma/client'
+import { STATUS, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
-type BookingStatus = BookingModel['status']
 type JsonObj = Record<string, unknown>
 
 function isJsonObj(v: unknown): v is JsonObj {
@@ -42,7 +41,6 @@ export async function POST(req: Request) {
   }
 
   const now = new Date()
-  const COMPLETED = 'COMPLETED' as BookingStatus
 
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -52,11 +50,10 @@ export async function POST(req: Request) {
       })
       if (!existing) return { notFound: true as const }
 
-      const cur = String(existing.status ?? '')
-      const curUpper = cur.toUpperCase()
+      const cur = canonStatus(existing.status)
 
       // ✅ 已完成：只补 completedAt（不覆盖已有时间）
-      if (curUpper === 'COMPLETED') {
+      if (cur === STATUS.COMPLETED) {
         if (existing.completedAt) {
           const booking = await tx.booking.findUnique({
             where: { id: bookingId },
@@ -73,11 +70,11 @@ export async function POST(req: Request) {
         return { changed: true as const, booking }
       }
 
-      // 未完成：置完成 + 写 completedAt（如已有 completedAt 则保留）
+      // ✅ 非已完成：置 COMPLETED + 写 completedAt（如已有则保留）
       const booking = await tx.booking.update({
         where: { id: bookingId },
         data: {
-          status: COMPLETED,
+          status: STATUS.COMPLETED,
           completedAt: existing.completedAt ?? now,
         },
         include: { service: true },
