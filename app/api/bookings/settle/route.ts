@@ -1,10 +1,8 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import type { booking as BookingModel } from '@prisma/client'
 
 export const runtime = 'nodejs'
 
-type BookingStatus = BookingModel['status']
 type JsonObj = Record<string, unknown>
 
 function isJsonObj(v: unknown): v is JsonObj {
@@ -29,9 +27,10 @@ function parseId(v: unknown): number | null {
   return null
 }
 
-function upperStatus(s: unknown): string {
-  return typeof s === 'string' ? s.trim().toUpperCase() : ''
-}
+const LEDGER_TYPE_SETTLE = 'SETTLE'
+const LEDGER_STATUS_CREATED = 'CREATED'
+const LEDGER_STATUS_SUCCESS = 'SUCCESS'
+const LEDGER_STATUS_FAILED = 'FAILED'
 
 export async function POST(req: Request) {
   const body = await readJson(req)
@@ -50,53 +49,92 @@ export async function POST(req: Request) {
     const result = await prisma.$transaction(async (tx) => {
       const booking = await tx.booking.findUnique({
         where: { id: bookingId },
-        select: { id: true, status: true, completedAt: true, updatedAt: true },
+        select: {
+          id: true,
+          status: true,
+          completedAt: true,
+          updatedAt: true,
+          payAmount: true,
+          payStatus: true,
+          service: { select: { price: true } },
+        },
       })
 
-      if (!booking) {
-        return { ok: false as const, status: 404 as const, error: 'Booking not found' }
+      if (!booking) return { notFound: true as const }
+
+      const status = String(booking.status ?? '').toUpperCase()
+      if (status !== 'COMPLETED') {
+        return { badStatus: true as const, status: booking.status }
       }
 
-      const cur = upperStatus(booking.status)
-
-      if (cur === 'CANCELED' || cur === 'CANCELLED') {
-        return { ok: false as const, status: 400 as const, error: 'Canceled booking cannot be settled' }
-      }
-
-      // ✅ 幂等：已完成但 completedAt 为空 -> 补写
-      if (cur === 'COMPLETED') {
-        if (booking.completedAt) {
-          return { ok: true as const, patched: false as const, booking }
-        }
-
-        const updated = await tx.booking.update({
+      // 1) 幂等补写 completedAt（不覆盖已有）
+      let patchedCompletedAt = false
+      if (!booking.completedAt) {
+        await tx.booking.update({
           where: { id: bookingId },
           data: { completedAt: now },
-          select: { id: true, status: true, completedAt: true, updatedAt: true },
         })
-
-        return { ok: true as const, patched: true as const, booking: updated }
+        patchedCompletedAt = true
       }
 
-      const updated = await tx.booking.update({
+      // 2) 准备一条 SETTLE 流水（幂等）
+      const amount = Number(booking.payAmount ?? 0) > 0 ? Number(booking.payAmount) : Number(booking.service?.price ?? 0)
+
+      const existingLedger = await tx.ledger.findUnique({
+        where: { bookingId_type: { bookingId, type: LEDGER_TYPE_SETTLE } },
+        select: { id: true, status: true, amount: true },
+      })
+
+      let ledgerPatched = false
+      if (!existingLedger) {
+        await tx.ledger.create({
+          data: {
+            bookingId,
+            type: LEDGER_TYPE_SETTLE,
+            amount,
+            status: LEDGER_STATUS_CREATED,
+            detail: null,
+          },
+        })
+        ledgerPatched = true
+      } else if (String(existingLedger.status).toUpperCase() !== LEDGER_STATUS_SUCCESS) {
+        // 如果之前是 FAILED/CREATED，都统一拉回 CREATED，保证可重试
+        await tx.ledger.update({
+          where: { bookingId_type: { bookingId, type: LEDGER_TYPE_SETTLE } },
+          data: {
+            amount,
+            status: LEDGER_STATUS_CREATED,
+            detail: null,
+          },
+        })
+        ledgerPatched = String(existingLedger.status).toUpperCase() === LEDGER_STATUS_FAILED || existingLedger.amount !== amount
+      }
+
+      const fresh = await tx.booking.findUnique({
         where: { id: bookingId },
-        data: {
-          status: 'COMPLETED' as unknown as BookingStatus,
-          completedAt: now,
-        },
         select: { id: true, status: true, completedAt: true, updatedAt: true },
       })
 
-      return { ok: true as const, patched: true as const, booking: updated }
+      return {
+        ok: true as const,
+        patched: patchedCompletedAt || ledgerPatched,
+        patchedCompletedAt,
+        patchedLedger: ledgerPatched,
+        booking: fresh,
+      }
     })
 
-    if (!result.ok) {
-      return NextResponse.json({ ok: false, error: result.error }, { status: result.status })
+    if ((result as { notFound?: true }).notFound) {
+      return NextResponse.json({ ok: false, error: '预约不存在' }, { status: 404 })
+    }
+    if ((result as { badStatus?: true }).badStatus) {
+      const r = result as { status: unknown }
+      return NextResponse.json({ ok: false, error: '仅允许对已完成订单结算', status: r.status }, { status: 400 })
     }
 
     return NextResponse.json(result)
   } catch (e) {
     console.error('[settle] error:', e)
-    return NextResponse.json({ ok: false, error: 'Internal Server Error' }, { status: 500 })
+    return NextResponse.json({ ok: false, error: '操作失败，请稍后再试' }, { status: 500 })
   }
 }
