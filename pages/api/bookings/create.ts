@@ -50,10 +50,14 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
     }
 
     // 冲突检测：同一理发师同一时间点只能有一单
-    const exists = await prisma.booking.findUnique({
-      where: { barberId_startTime: { barberId: barberIdNum, startTime: start } },
-      select: { id: true },
-    })
+const exists = await prisma.booking.findFirst({
+   where: {
+    barberId: barberIdNum,
+    startTime: start,
+  },
+  select: { id: true },
+ })
+
 
     if (exists) {
       return res.status(409).json({
