@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
+import type { Prisma } from '@prisma/client'
+
+type Tx = Prisma.TransactionClient
 
 export const runtime = 'nodejs'
 
@@ -34,17 +37,46 @@ function parseNonEmptyString(v: unknown): string | null {
   return s ? s : null
 }
 
-// 把 "2025-12-06" + "14:30" 拼成一个 Date（按服务器时区）
-function buildStartTime(dateStr: string, timeStr: string): Date {
-  return new Date(`${dateStr}T${timeStr}:00`)
-}
+const SLOT_MINUTES = 30
 
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
 }
 
-function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
-  return aStart < bEnd && aEnd > bStart
+function buildDayRange(dateStr: string) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  const start = new Date(y, m - 1, d, 0, 0, 0)
+  const end = new Date(y, m - 1, d + 1, 0, 0, 0)
+  return { start, end }
+}
+
+// "2025-12-06" + "14:30" => Date（按服务器时区）
+function buildStartTime(dateStr: string, timeStr: string): Date {
+  return new Date(`${dateStr}T${timeStr}:00`)
+}
+
+async function calcFinalPrice(tx: Tx, barberId: number, serviceId: number) {
+  const bs = await tx.barberservice.findUnique({
+    where: { barberId_serviceId: { barberId, serviceId } },
+    select: { price: true },
+  })
+  if (bs && typeof bs.price === 'number') return bs.price
+
+  const svc = await tx.service.findUnique({
+    where: { id: serviceId },
+    select: { price: true },
+  })
+  if (!svc) throw new Error(`服务不存在: serviceId=${serviceId}`)
+  return svc.price
+}
+
+async function getServiceDuration(tx: Tx, serviceId: number) {
+  const svc = await tx.service.findUnique({
+    where: { id: serviceId },
+    select: { durationMinutes: true },
+  })
+  if (!svc) throw new Error(`服务不存在: serviceId=${serviceId}`)
+  return svc.durationMinutes ?? SLOT_MINUTES
 }
 
 export async function POST(req: Request) {
@@ -70,92 +102,76 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'date/time 格式不正确' }, { status: 400 })
   }
 
-  // 你原来 create 的 data（保持一致）
-  const data = {
-    shopId,
-    barberId,
-    serviceId,
-    startTime,
-    status: STATUS.SCHEDULED,
-    userName,
-    phone,
-    source: 'miniapp' as const,
-  }
+  // ✅ “理发师 + 日期”做锁
+  const lockKey = `bf:barber:${barberId}:${date}`
 
   try {
     const result = await prisma.$transaction(async (tx) => {
-      const lockKey = `bf:barber:${barberId}`
-
-      const lockRows =
-        await tx.$queryRaw<Array<{ ok: number | null }>>`SELECT GET_LOCK(${lockKey}, 5) AS ok`
-
-      if (lockRows?.[0]?.ok !== 1) {
-        return { error: 'LOCK_TIMEOUT' as const }
-      }
+      const gotRows = await tx.$queryRaw<Array<{ got: any }>>`
+        SELECT GET_LOCK(${lockKey}, 3) AS got
+      `
+      const got = Number(gotRows?.[0]?.got ?? 0)
+      if (got !== 1) return { kind: 'busy' as const }
 
       try {
-        // 服务时长（决定 overlap）
-        const svc = await tx.service.findUnique({
-          where: { id: serviceId },
-          select: { durationMinutes: true },
-        })
-        const duration = svc?.durationMinutes ?? 30
+        const { start: dayStart, end: dayEnd } = buildDayRange(date)
 
-        const newStart = startTime
-        const newEnd = addMinutes(newStart, duration)
+        const duration = await getServiceDuration(tx, serviceId)
+        const newEnd = addMinutes(startTime, duration)
 
-        // 只查当天 + 只看 slotLock=true 的单
-        const dayStart = new Date(`${date}T00:00:00`)
-        const dayEnd = new Date(`${date}T23:59:59`)
-
-        const candidates = await tx.booking.findMany({
+        const exist = await tx.booking.findMany({
           where: {
             barberId,
+            startTime: { gte: dayStart, lt: dayEnd },
             slotLock: true,
-            startTime: { gte: dayStart, lte: dayEnd },
           },
           include: { service: { select: { durationMinutes: true } } },
           orderBy: { startTime: 'asc' },
         })
 
-        const conflict = candidates.find((b) => {
-          const d = b.service?.durationMinutes ?? 30
-          const bEnd = addMinutes(b.startTime, d)
-          return overlaps(b.startTime, bEnd, newStart, newEnd)
+        const conflict = exist.some((b) => {
+          const dur = b.service?.durationMinutes ?? SLOT_MINUTES
+          const bEnd = addMinutes(b.startTime, dur)
+          return startTime < bEnd && newEnd > b.startTime
+        })
+        if (conflict) return { kind: 'conflict' as const }
+
+        const finalPrice = await calcFinalPrice(tx, barberId, serviceId)
+
+        const booking = await tx.booking.create({
+          data: {
+            shopId,
+            barberId,
+            serviceId,
+            startTime,
+            status: STATUS.SCHEDULED,
+            slotLock: true,
+            userName,
+            phone,
+            source: 'miniapp',
+            price: finalPrice,
+          },
+          include: { shop: true, barber: true, service: true },
         })
 
-        if (conflict) {
-          return { error: 'SLOT_TAKEN' as const, conflictId: conflict.id }
-        }
-
-        try {
-          const booking = await tx.booking.create({
-            data: {
-              ...data,
-              slotLock: true, // ✅ 强制锁住时段
-            },
-          })
-          return { booking }
-        } catch (e: any) {
-          // 并发兜底：如果你有唯一键，也会走到这里
-          if (e?.code === 'P2002') {
-            return { error: 'SLOT_TAKEN' as const }
-          }
-          throw e
-        }
+        return { kind: 'ok' as const, booking }
+      } catch (e: any) {
+        if (e?.code === 'P2002') return { kind: 'conflict' as const }
+        throw e
       } finally {
-        await tx.$queryRaw`DO RELEASE_LOCK(${`bf:barber:${barberId}`})`
+        try {
+          await tx.$queryRaw`SELECT RELEASE_LOCK(${lockKey}) AS released`
+        } catch (e) {
+          console.error('RELEASE_LOCK failed:', e)
+        }
       }
     })
 
-    if ('error' in result) {
-      if (result.error === 'SLOT_TAKEN') {
-        return NextResponse.json({ ok: false, error: '该时段已被预约' }, { status: 409 })
-      }
-      return NextResponse.json(
-        { ok: false, error: '系统繁忙，请稍后再试' },
-        { status: 503 },
-      )
+    if (result.kind === 'busy') {
+      return NextResponse.json({ ok: false, error: '系统繁忙，请稍后再试' }, { status: 503 })
+    }
+    if (result.kind === 'conflict') {
+      return NextResponse.json({ ok: false, error: '该时段已被预约' }, { status: 409 })
     }
 
     return NextResponse.json({ ok: true, booking: result.booking }, { status: 201 })
