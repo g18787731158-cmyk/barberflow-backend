@@ -1,34 +1,59 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
-function pickId(body: any) {
-  const raw = body?.id ?? body?.bookingId ?? body?.bookingID
-  const id = Number(raw)
-  return Number.isFinite(id) && id > 0 ? id : null
-}
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
-    const id = pickId(body)
+    const id = Number(body?.id)
 
-    if (!id) {
-      return NextResponse.json({ error: 'Missing booking id' }, { status: 400 })
+    if (!id || Number.isNaN(id)) {
+      return NextResponse.json({ error: 'Missing or invalid id' }, { status: 400 })
     }
 
-    const now = new Date()
+    const booking = await prisma.booking.findUnique({
+      where: { id },
+      select: { id: true, status: true, slotLock: true, completedAt: true },
+    })
 
-    // 关键：完成 => 解锁 + 写 completedAt
-    const booking = await prisma.booking.update({
+    if (!booking) {
+      return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
+    }
+
+    // ✅ 幂等：已完成则补齐 completedAt/slotLock 后返回 ok
+    if (booking.status === 'COMPLETED') {
+      const needFix = booking.slotLock || !booking.completedAt
+      if (needFix) {
+        const fixed = await prisma.booking.update({
+          where: { id },
+          data: {
+            slotLock: false,
+            completedAt: booking.completedAt ?? new Date(),
+          },
+          select: { id: true, status: true, slotLock: true, completedAt: true },
+        })
+        return NextResponse.json({ ok: true, ...fixed, alreadyCompleted: true })
+      }
+      return NextResponse.json({
+        ok: true,
+        id,
+        status: 'COMPLETED',
+        slotLock: false,
+        completedAt: booking.completedAt,
+        alreadyCompleted: true,
+      })
+    }
+
+    const updated = await prisma.booking.update({
       where: { id },
       data: {
         status: 'COMPLETED',
         slotLock: false,
-        completedAt: now,
+        completedAt: booking.completedAt ?? new Date(),
       },
+      select: { id: true, status: true, slotLock: true, completedAt: true },
     })
 
-    return NextResponse.json({ ok: true, booking })
+    return NextResponse.json({ ok: true, ...updated })
   } catch (err: any) {
     console.error('[bookings/complete] error:', err)
     return NextResponse.json(
