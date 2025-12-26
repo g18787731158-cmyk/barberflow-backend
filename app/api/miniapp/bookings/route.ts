@@ -138,21 +138,32 @@ export async function POST(req: Request) {
 
         const finalPrice = await calcFinalPrice(tx, barberId, serviceId)
 
-        const booking = await tx.booking.create({
-          data: {
-            shopId,
-            barberId,
-            serviceId,
-            startTime,
-            status: STATUS.SCHEDULED,
-            slotLock: true,
-            userName,
-            phone,
-            source: 'miniapp',
-            price: finalPrice,
-          },
-          include: { shop: true, barber: true, service: true },
-        })
+const booking = await tx.booking.create({
+  data: {
+    shopId,
+    barberId,
+    serviceId,
+    startTime,
+
+    status: STATUS.SCHEDULED,
+    slotLock: true,
+
+    userName,
+    phone,
+    source: 'miniapp',
+
+    // ✅ 订单金额：固定写死在订单上
+    price: finalPrice,
+
+    // ✅ 支付三件套：从“未支付”开始
+    payStatus: 'unpaid',
+    payAmount: finalPrice,
+
+    // ✅ 分账状态：先 pending（我们不做资金池）
+    splitStatus: 'pending',
+  },
+  include: { shop: true, barber: true, service: true },
+})
 
         return { kind: 'ok' as const, booking }
       } catch (e: any) {
