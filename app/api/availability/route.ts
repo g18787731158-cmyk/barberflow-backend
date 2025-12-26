@@ -1,51 +1,60 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+const SLOT_MINUTES = 30
+
+function cnDayRange(dateStr: string) {
+  // ✅ 强制按中国时区切天（+08:00），别用服务器时区
+  const start = new Date(`${dateStr}T00:00:00+08:00`)
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
+  return { start, end }
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0')
+}
+
+// ✅ 把 Date 转成中国本地 HH:mm（不依赖服务器时区）
+function toCN_HHMM(d: Date) {
+  const ms = d.getTime() + 8 * 60 * 60 * 1000
+  const x = new Date(ms)
+  return `${pad2(x.getUTCHours())}:${pad2(x.getUTCMinutes())}`
+}
+
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
-    const date = searchParams.get('date') // 例如 "2025-11-20"
-    const barberIdParam = searchParams.get('barberId') // 例如 "1"
+    const date = searchParams.get('date')
+    const barberIdParam = searchParams.get('barberId')
     const barberId = barberIdParam ? Number(barberIdParam) : null
 
     if (!date || !barberId) {
-      return NextResponse.json(
-        { error: '缺少参数 date 或 barberId' },
-        { status: 400 },
-      )
+      return NextResponse.json({ error: '缺少参数 date 或 barberId' }, { status: 400 })
     }
 
-    const dayStart = new Date(`${date}T00:00:00`)
-    const dayEnd = new Date(`${date}T23:59:59`)
+    const { start: dayStart, end: dayEnd } = cnDayRange(date)
 
     const bookings = await prisma.booking.findMany({
       where: {
         barberId,
-        startTime: {
-          gte: dayStart,
-          lte: dayEnd,
-        },
+        startTime: { gte: dayStart, lt: dayEnd }, // ✅ 用 lt next day，别用 23:59:59
+        // ✅ 建议过滤取消单（按你库里的状态枚举改）
+        status: { notIn: ['CANCELLED', 'CANCELED'] as any },
       },
       include: {
-        service: {
-          select: { durationMinutes: true },
-        },
+        service: { select: { durationMinutes: true } },
       },
     })
 
-    const occupied = new Set<string>() // 形如 "13:00" / "13:30"
+    const occupied = new Set<string>()
 
     for (const b of bookings) {
-      const duration = b.service?.durationMinutes ?? 30
-      const blocks = Math.max(1, Math.ceil(duration / 30))
-      const start = new Date(b.startTime)
+      const duration = b.service?.durationMinutes ?? SLOT_MINUTES
+      const blocks = Math.max(1, Math.ceil(duration / SLOT_MINUTES))
 
       for (let i = 0; i < blocks; i++) {
-        const d = new Date(start)
-        d.setMinutes(d.getMinutes() + i * 30)
-        const hh = String(d.getHours()).padStart(2, '0')
-        const mm = String(d.getMinutes()).padStart(2, '0')
-        occupied.add(`${hh}:${mm}`)
+        const t = new Date(b.startTime.getTime() + i * SLOT_MINUTES * 60 * 1000)
+        occupied.add(toCN_HHMM(t))
       }
     }
 

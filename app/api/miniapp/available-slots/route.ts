@@ -9,16 +9,24 @@ function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
 }
 
-function buildDayRange(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number)
+function pad2(n: number) {
+  return String(n).padStart(2, '0')
+}
 
-  const start = new Date(y, m - 1, d, 0, 0, 0)
-  const end = new Date(y, m - 1, d + 1, 0, 0, 0)
+function toCN_HHMM(d: Date) {
+  const ms = d.getTime() + 8 * 60 * 60 * 1000
+  const x = new Date(ms)
+  return `${pad2(x.getUTCHours())}:${pad2(x.getUTCMinutes())}`
+}
 
-  const slotsStart = new Date(y, m - 1, d, WORK_START_HOUR, 0, 0)
-  const slotsEnd = new Date(y, m - 1, d, WORK_END_HOUR, 0, 0)
+function buildCNRange(dateStr: string) {
+  const dayStart = new Date(`${dateStr}T00:00:00+08:00`)
+  const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
 
-  return { start, end, slotsStart, slotsEnd }
+  const slotsStart = new Date(`${dateStr}T${pad2(WORK_START_HOUR)}:00:00+08:00`)
+  const slotsEnd = new Date(`${dateStr}T${pad2(WORK_END_HOUR)}:00:00+08:00`)
+
+  return { dayStart, dayEnd, slotsStart, slotsEnd }
 }
 
 export async function GET(req: NextRequest) {
@@ -36,53 +44,43 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid barberId' }, { status: 400 })
     }
 
-    const { start: dayStart, end: dayEnd, slotsStart, slotsEnd } = buildDayRange(dateStr)
+    const { dayStart, dayEnd, slotsStart, slotsEnd } = buildCNRange(dateStr)
 
-    // ✅ 只查“仍在占用时段”的预约（slotLock=true）
     const bookings = await prisma.booking.findMany({
       where: {
         barberId,
         startTime: { gte: dayStart, lt: dayEnd },
-        slotLock: true,
+        // ✅ 先按“未取消”算占用，避免 slotLock 让你全放开
+        status: { notIn: ['CANCELLED', 'CANCELED'] as any },
+        // 如果你确认创建预约时 slotLock 一定为 true，再把下面这行加回去：
+        // slotLock: true,
       },
-      include: {
-        service: { select: { durationMinutes: true } },
-      },
+      include: { service: { select: { durationMinutes: true } } },
       orderBy: { startTime: 'asc' },
     })
 
     const blockedRanges = bookings.map((b) => {
       const duration = b.service?.durationMinutes ?? SLOT_MINUTES
-      const end = addMinutes(b.startTime, duration)
-      return { start: b.startTime, end }
+      return { start: b.startTime, end: addMinutes(b.startTime, duration) }
     })
 
-    type Slot = { label: string; startTime: string; available: boolean }
-    const rawSlots: Slot[] = []
+    const responseSlots: { time: string; label: string; disabled: boolean }[] = []
 
     let cursor = slotsStart
     while (cursor < slotsEnd) {
       const slotStart = new Date(cursor.getTime())
-      const hour = String(slotStart.getHours()).padStart(2, '0')
-      const minute = String(slotStart.getMinutes()).padStart(2, '0')
-      const label = `${hour}:${minute}`
+      const label = toCN_HHMM(slotStart)
 
       const isBlocked = blockedRanges.some((r) => slotStart >= r.start && slotStart < r.end)
 
-      rawSlots.push({
+      responseSlots.push({
+        time: label,
         label,
-        startTime: slotStart.toISOString(),
-        available: !isBlocked,
+        disabled: isBlocked,
       })
 
       cursor = addMinutes(cursor, SLOT_MINUTES)
     }
-
-    const responseSlots = rawSlots.map((s) => ({
-      time: s.label,
-      label: s.label,
-      disabled: !s.available,
-    }))
 
     return NextResponse.json(responseSlots)
   } catch (err) {
