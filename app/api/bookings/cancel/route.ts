@@ -1,8 +1,5 @@
-// app/api/bookings/cancel/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-
-export const runtime = 'nodejs'
 
 type JsonObj = Record<string, unknown>
 
@@ -32,7 +29,7 @@ function parsePosInt(v: unknown): number | null {
  * 规则：
  * - 取消 = status: CANCELED
  * - 释放时段 = slotLock: NULL（不是 false）
- *   这样不会触发 @@unique([barberId, startTime, slotLock]) 的冲突
+ *   这样不会触发 @@unique([barberId, startTime, slotLock]) 的冲突（MySQL 允许多个 NULL）
  * - 幂等：重复取消直接返回 ok
  */
 export async function POST(req: NextRequest) {
@@ -58,10 +55,9 @@ export async function POST(req: NextRequest) {
           await tx.booking.update({
             where: { id },
             data: { slotLock: null },
-            select: { id: true },
           })
         }
-        return { kind: 'ok' as const, id, status: 'CANCELED' as const }
+        return { kind: 'ok' as const, id, status: 'CANCELED' }
       }
 
       const updated = await tx.booking.update({
@@ -74,14 +70,13 @@ export async function POST(req: NextRequest) {
         select: { id: true, status: true },
       })
 
-      return { kind: 'ok' as const, id: updated.id, status: updated.status as 'CANCELED' }
+      return { kind: 'ok' as const, id: updated.id, status: updated.status }
     })
 
     if (result.kind === 'notfound') {
       return NextResponse.json({ ok: false, error: 'Booking not found' }, { status: 404 })
     }
 
-    // 对外语义：slotLock=false 表示“已释放”
     return NextResponse.json({ ok: true, id: result.id, status: result.status, slotLock: false })
   } catch (err: any) {
     console.error('[bookings/cancel] error:', err)

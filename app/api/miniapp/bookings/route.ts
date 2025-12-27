@@ -1,4 +1,3 @@
-// app/api/miniapp/bookings/route.ts
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
@@ -119,20 +118,29 @@ export async function POST(req: Request) {
         const duration = await getServiceDuration(tx, serviceId)
         const newEnd = addMinutes(startTime, duration)
 
-        // 当天所有“仍占用时段”的单（slotLock=true）
         const exist = await tx.booking.findMany({
           where: {
             barberId,
             startTime: { gte: dayStart, lt: dayEnd },
             slotLock: true,
           },
-          include: { service: { select: { durationMinutes: true } } },
+          select: { startTime: true, serviceId: true },
           orderBy: { startTime: 'asc' },
         })
 
-        // ✅ 重叠判断：90min 不会被插队
+        // 批量拿当日已有单的服务时长
+        const existServiceIds = Array.from(new Set(exist.map((b) => b.serviceId)))
+        const svcs = existServiceIds.length
+          ? await tx.service.findMany({
+              where: { id: { in: existServiceIds } },
+              select: { id: true, durationMinutes: true },
+            })
+          : []
+        const durMap = new Map<number, number>()
+        for (const s of svcs) durMap.set(s.id, s.durationMinutes ?? SLOT_MINUTES)
+
         const conflict = exist.some((b) => {
-          const dur = b.service?.durationMinutes ?? SLOT_MINUTES
+          const dur = durMap.get(b.serviceId) ?? SLOT_MINUTES
           const bEnd = addMinutes(b.startTime, dur)
           return startTime < bEnd && newEnd > b.startTime
         })
@@ -154,14 +162,10 @@ export async function POST(req: Request) {
             phone,
             source: 'miniapp',
 
-            // ✅ 订单金额：写死在订单上
             price: finalPrice,
-
-            // ✅ 支付三件套：从“未支付”开始
             payStatus: 'unpaid',
             payAmount: finalPrice,
 
-            // ✅ 分账状态：先 pending
             splitStatus: 'pending',
           },
           include: { shop: true, barber: true, service: true },
