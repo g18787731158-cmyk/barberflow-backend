@@ -1,3 +1,6 @@
+-- patch: ensure completedAt exists when replaying migrations on shadow db
+ALTER TABLE `booking` ADD COLUMN `completedAt` DATETIME(3) NULL;
+
 -- 1) 把默认值改成全大写
 ALTER TABLE `booking`
   MODIFY `status` VARCHAR(191) NOT NULL DEFAULT 'SCHEDULED';
