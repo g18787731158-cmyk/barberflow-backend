@@ -37,24 +37,19 @@ function parseNonEmptyString(v: unknown): string | null {
 }
 
 const SLOT_MINUTES = 30
-
-// ✅ 至少提前“1个日历日”预约：今天只能约明天及以后（不要求满24小时）
 const MIN_ADVANCE_DAYS = 1
 
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
 }
-
 function addDays(date: Date, days: number) {
   const d = new Date(date)
   d.setDate(d.getDate() + days)
   return d
 }
-
 function pad2(n: number) {
   return String(n).padStart(2, '0')
 }
-
 function formatYMD(d: Date) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
@@ -66,9 +61,19 @@ function buildDayRange(dateStr: string) {
   return { start, end }
 }
 
-// "2025-12-06" + "14:30" => Date（按服务器时区）
 function buildStartTime(dateStr: string, timeStr: string): Date {
   return new Date(`${dateStr}T${timeStr}:00`)
+}
+
+function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
+  return aStart < bEnd && aEnd > bStart
+}
+
+function slotMinutes(timeStr: string, durationMinutes: number) {
+  const [hh, mm] = timeStr.split(':').map(Number)
+  const start = hh * 60 + mm
+  const end = start + durationMinutes
+  return { start, end }
 }
 
 async function calcFinalPrice(tx: Tx, barberId: number, serviceId: number) {
@@ -95,10 +100,6 @@ async function getServiceDuration(tx: Tx, serviceId: number) {
   return svc.durationMinutes ?? SLOT_MINUTES
 }
 
-function overlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
-  return aStart < bEnd && aEnd > bStart
-}
-
 export async function POST(req: Request) {
   const body = await readJson(req)
   if (!body) {
@@ -117,9 +118,8 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '缺少必要字段' }, { status: 400 })
   }
 
-  // ✅ 提前“日历天”限制：今天只能约明天及以后（服务端强校验，防绕过）
-  const now = new Date()
-  const minDateStr = formatYMD(addDays(now, MIN_ADVANCE_DAYS))
+  // 今天只能约明天起（按日历天）
+  const minDateStr = formatYMD(addDays(new Date(), MIN_ADVANCE_DAYS))
   if (date < minDateStr) {
     return NextResponse.json({ ok: false, error: '需至少提前一天预约' }, { status: 400 })
   }
@@ -129,7 +129,7 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'date/time 格式不正确' }, { status: 400 })
   }
 
-  // ✅ “理发师 + 日期”做锁（防并发插队）
+  // “理发师 + 日期”做锁（防并发插队）
   const lockKey = `bf:barber:${barberId}:${date}`
 
   try {
@@ -146,41 +146,36 @@ export async function POST(req: Request) {
         const duration = await getServiceDuration(tx, serviceId)
         const newEnd = addMinutes(startTime, duration)
 
-        // ✅ timeoff 强校验：休息/休假时段禁止下单（防绕过 slots）
-        const offs = await tx.barbertimeoff.findMany({
+        // ✅ timeoff 强校验（防绕过）
+        const timeoffs = await tx.barbertimeoff.findMany({
           where: {
             barberId,
             enabled: true,
             OR: [
               { type: 'DAILY' },
-              { AND: [{ startAt: { lt: dayEnd } }, { endAt: { gt: dayStart } }] },
+              {
+                type: { in: ['DATE_RANGE', 'DATE_PARTIAL'] },
+                startAt: { lt: dayEnd },
+                endAt: { gt: dayStart },
+              },
             ],
           },
           orderBy: { id: 'desc' },
         })
 
-        const blocked: Array<{ start: Date; end: Date }> = []
-        for (const o of offs) {
-          if (o.type === 'DAILY') {
-            if (
-              typeof o.startMinute === 'number' &&
-              typeof o.endMinute === 'number' &&
-              o.endMinute > o.startMinute
-            ) {
-              const s = new Date(dayStart.getTime() + o.startMinute * 60 * 1000)
-              const e = new Date(dayStart.getTime() + o.endMinute * 60 * 1000)
-              blocked.push({ start: s, end: e })
-            }
-          } else if (o.startAt && o.endAt && o.endAt > o.startAt) {
-            blocked.push({ start: o.startAt, end: o.endAt })
+        const { start: sMin, end: eMin } = slotMinutes(time, duration)
+
+        const timeoffConflict = timeoffs.some((t) => {
+          if (t.type === 'DAILY') {
+            if (t.startMinute == null || t.endMinute == null) return false
+            return sMin < t.endMinute && eMin > t.startMinute
           }
-        }
+          if (!t.startAt || !t.endAt) return false
+          return overlaps(startTime, newEnd, t.startAt, t.endAt)
+        })
+        if (timeoffConflict) return { kind: 'conflict' as const }
 
-        if (blocked.some((b) => overlap(startTime, newEnd, b.start, b.end))) {
-          return { kind: 'conflict' as const }
-        }
-
-        // 查当天所有“仍占用时段”的单（slotLock=true）
+        // 查当天所有“仍占用时段”的单
         const exist = await tx.booking.findMany({
           where: {
             barberId,
@@ -194,7 +189,7 @@ export async function POST(req: Request) {
         const conflict = exist.some((b) => {
           const dur = b.service?.durationMinutes ?? SLOT_MINUTES
           const bEnd = addMinutes(b.startTime, dur)
-          return overlap(startTime, newEnd, b.startTime, bEnd)
+          return overlaps(startTime, newEnd, b.startTime, bEnd)
         })
         if (conflict) return { kind: 'conflict' as const }
 
@@ -225,7 +220,6 @@ export async function POST(req: Request) {
 
         return { kind: 'ok' as const, booking }
       } catch (e: any) {
-        // 唯一约束撞了，就当冲突
         if (e?.code === 'P2002') return { kind: 'conflict' as const }
         throw e
       } finally {
@@ -241,7 +235,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: '系统繁忙，请稍后再试' }, { status: 503 })
     }
     if (result.kind === 'conflict') {
-      return NextResponse.json({ ok: false, error: '该时段不可预约或已被预约' }, { status: 409 })
+      return NextResponse.json({ ok: false, error: '该时段不可约' }, { status: 409 })
     }
 
     return NextResponse.json({ ok: true, booking: result.booking }, { status: 201 })

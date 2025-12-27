@@ -1,175 +1,144 @@
 #!/usr/bin/env bash
-set -Eeuo pipefail
+set -euo pipefail
 
 APP_DIR="/home/ecs-user/apps/barberflow-backend"
+APP_NAME="barberflow-backend"
 BRANCH="main"
-PM2_APP_NAME="barberflow-backend"
+PORT="3000"
 
-BACKUP_ROOT="/home/ecs-user/.deploy_backups/barberflow-backend"
-mkdir -p "${BACKUP_ROOT}"
+cd "$APP_DIR"
 
-cd "${APP_DIR}"
+echo "==> cd $APP_DIR"
 
-PREV_HEAD="$(git rev-parse HEAD)"
-TS="$(date +%Y%m%d-%H%M%S)"
-BACKUP_DIR="${BACKUP_ROOT}/${TS}-${PREV_HEAD}"
+# ---------- backup .next ----------
+BACKUP_DIR="/home/ecs-user/.deploy_backups/$APP_NAME/$(date +%Y%m%d-%H%M%S)-$(git rev-parse HEAD)"
+mkdir -p "$BACKUP_DIR"
+if [ -d ".next" ]; then
+  cp -a .next "$BACKUP_DIR/.next"
+  echo "✅ backup .next done -> $BACKUP_DIR"
+else
+  echo "ℹ️ no .next to backup"
+fi
+
+OLD_REV="$(git rev-parse HEAD)"
+echo "==> old rev: $OLD_REV"
+
+echo "==> fetch origin/$BRANCH"
+git fetch origin "$BRANCH" --quiet
+
+echo "==> hard reset to origin/$BRANCH"
+git reset --hard "origin/$BRANCH" --quiet
+NEW_REV="$(git rev-parse HEAD)"
+echo "==> new rev: $NEW_REV"
+
+# ---------- changed files ----------
+echo "==> changed files: $OLD_REV..$NEW_REV"
+CHANGED="$(git diff --name-only "$OLD_REV" "$NEW_REV" || true)"
+echo "$CHANGED" | sed '/^$/d' || true
+
+need_npm=0
+need_migrate=0
+need_generate=0
+
+if echo "$CHANGED" | grep -Eq '^(package\.json|package-lock\.json)$'; then
+  need_npm=1
+fi
+
+if echo "$CHANGED" | grep -Eq '^prisma/schema\.prisma$'; then
+  need_generate=1
+  need_migrate=1
+fi
+
+if echo "$CHANGED" | grep -Eq '^prisma/migrations/'; then
+  need_migrate=1
+fi
+
+# ---------- clean untracked (but keep scripts + env) ----------
+echo "==> clean untracked (exclude scripts/ and .env*)"
+git clean -fd -e "scripts/" -e ".env*" >/dev/null || true
 
 rollback() {
-  trap - ERR
-  set +e
   echo
-  echo "❌ deploy failed — rolling back to ${PREV_HEAD} ..."
-
-  # 1) 回到旧 commit
-  git reset --hard "${PREV_HEAD}" >/dev/null 2>&1 || true
-
-  # 2) 恢复 .next（如果有备份）
-  if [ -d "${BACKUP_DIR}/.next" ]; then
-    rm -rf .next >/dev/null 2>&1 || true
-    cp -a "${BACKUP_DIR}/.next" .next || true
+  echo "❌ deploy failed — rolling back .next ..."
+  if [ -d "$BACKUP_DIR/.next" ]; then
+    rm -rf .next
+    cp -a "$BACKUP_DIR/.next" .next
     echo "✅ restored .next from backup"
-  else
-    echo "⚠️ no .next backup found, skip restore"
   fi
 
-  # 3) 拉起服务
-  pm2 restart "${PM2_APP_NAME}" --update-env >/dev/null 2>&1 || true
-  sleep 1
+  # PM2 兜底：不存在就 start，存在就 reload
+  if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+    pm2 reload "$APP_NAME" || true
+  else
+    pm2 start npm --name "$APP_NAME" -- start || true
+    pm2 save || true
+  fi
 
-  # 4) 健康检查
-  curl -fsS --max-time 3 "http://127.0.0.1:3000/api/health" >/dev/null \
-    && echo "✅ rollback local /api/health OK" \
-    || echo "⚠️ rollback local /api/health FAIL (check pm2 logs)"
-
+  curl -fsS "http://127.0.0.1:$PORT/api/health" || echo "⚠️ rollback local /api/health FAIL (check pm2 logs)"
   echo "==> rollback done"
-  pm2 list || true
-  exit 1
+  pm2 ls || true
 }
 
 trap rollback ERR
 
-echo "==> cd ${APP_DIR}"
-echo "==> backup to ${BACKUP_DIR}"
-mkdir -p "${BACKUP_DIR}"
-echo "${PREV_HEAD}" > "${BACKUP_DIR}/HEAD"
-
-# 备份 .next（如果存在）
-if [ -d .next ]; then
-  cp -a .next "${BACKUP_DIR}/.next"
-  echo "✅ backup .next done"
-else
-  echo "ℹ️ no .next to backup (first deploy?)"
-fi
-
-echo "==> git remote"
-git remote -v || true
-
-echo "==> fetch origin/${BRANCH}"
-git fetch origin "${BRANCH}"
-
-echo "==> compute changed files: HEAD..origin/${BRANCH}"
-CHANGED_FILES="$(git diff --name-only HEAD..origin/${BRANCH} || true)"
-echo "${CHANGED_FILES}" | sed -n '1,200p' || true
-
-NEED_NPM_CI=0
-NEED_PRISMA_GENERATE=0
-NEED_PRISMA_MIGRATE=0
-
-# package/lock 改了 => npm ci
-if echo "${CHANGED_FILES}" | grep -Eq '(^|/)(package-lock\.json|package\.json)$'; then
-  NEED_NPM_CI=1
-fi
-
-# prisma migrations 变更 => migrate deploy + generate
-if echo "${CHANGED_FILES}" | grep -Eq "(^|/)prisma/migrations/"; then
-  NEED_PRISMA_MIGRATE=1
-  NEED_PRISMA_GENERATE=1
-fi
-
-# prisma schema/config 变更 => generate
-if echo "${CHANGED_FILES}" | grep -Eq "(^|/)prisma/schema\.prisma$|(^|/)prisma\.config\.ts$"; then
-  NEED_PRISMA_GENERATE=1
-fi
-
-echo "==> hard reset to origin/${BRANCH}"
-git reset --hard "origin/${BRANCH}"
-
-echo "==> clean untracked"
-git clean -fd
-
-# reset/clean 后再判断 node_modules（更规范）
-if [ ! -d node_modules ]; then
-  NEED_NPM_CI=1
-fi
-
-export npm_config_audit=false
-export npm_config_fund=false
-export npm_config_loglevel=warn
-
-if [ "${NEED_NPM_CI}" -eq 1 ]; then
+# ---------- install ----------
+if [ "$need_npm" -eq 1 ]; then
   echo "==> npm ci"
   npm ci
-  # 只要 npm ci 跑过，保险起见也生成 Prisma Client
-  NEED_PRISMA_GENERATE=1
 else
-  echo "==> skip npm ci"
+  echo "==> skip npm ci (no package*.json change)"
 fi
 
-load_env_for_prisma() {
-  local env_file=""
-  if [ -f .env.production ]; then
-    env_file=".env.production"
-  elif [ -f .env ]; then
-    env_file=".env"
-  fi
-
-  if [ -n "${env_file}" ]; then
-    echo "==> load env from ${env_file}"
-    set -a
-    # shellcheck disable=SC1090
-    source "${env_file}"
-    set +a
-  else
-    echo "==> no .env.production/.env found, skip env load"
-  fi
-}
-
-if [ "${NEED_PRISMA_MIGRATE}" -eq 1 ]; then
+# ---------- migrate + generate ----------
+if [ "$need_migrate" -eq 1 ]; then
   echo "==> prisma migrate deploy"
-  load_env_for_prisma
-  if [ -z "${DATABASE_URL:-}" ]; then
-    echo "❌ DATABASE_URL is missing. Put it in .env.production (recommended) or export it in the shell."
-    exit 1
-  fi
   npx prisma migrate deploy
 else
-  echo "==> skip prisma migrate deploy"
+  echo "==> skip prisma migrate deploy (no prisma migrations/schema change)"
 fi
 
-if [ "${NEED_PRISMA_GENERATE}" -eq 1 ]; then
+if [ "$need_generate" -eq 1 ] || [ "$need_migrate" -eq 1 ] || [ "$need_npm" -eq 1 ]; then
   echo "==> prisma generate"
   npx prisma generate
 else
   echo "==> skip prisma generate"
 fi
 
+# ---------- build ----------
 echo "==> next build"
-export NODE_OPTIONS="--max-old-space-size=768"
 npm run build
 
-echo "==> pm2 restart ${PM2_APP_NAME}"
-pm2 restart "${PM2_APP_NAME}" --update-env
+# ---------- pm2 reload/start ----------
+echo "==> pm2 reload/start $APP_NAME"
+if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+  pm2 reload "$APP_NAME"
+else
+  pm2 start npm --name "$APP_NAME" -- start
+fi
+pm2 save
 
-echo "==> wait 1s and local health check"
-sleep 1
-curl -fsS --max-time 3 "http://127.0.0.1:3000/api/health" >/dev/null && echo "  ✅ local /api/health OK"
+# ---------- warmup ----------
+echo "==> wait app warmup"
+for i in {1..20}; do
+  if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+    echo "✅ local api/health ok"
+    break
+  fi
+  sleep 0.5
+done
 
-echo "==> public healthz check"
-curl -fsS --max-time 5 "https://barberflow.cn/healthz" >/dev/null && echo "  ✅ public /healthz OK" || echo "  ⚠️ public /healthz not reachable (ignore)"
+# ---------- nginx reload (optional, keep as you had) ----------
+echo "==> nginx test/reload"
+sudo nginx -t
+sudo systemctl reload nginx
 
-# 成功后清理旧备份：只留最近10份
-echo "==> cleanup old backups (keep last 10)"
-ls -1dt "${BACKUP_ROOT}"/* 2>/dev/null | tail -n +11 | xargs -r rm -rf
+# ---------- smoke (optional) ----------
+if [ -x "./scripts/pay-smoke.sh" ]; then
+  echo "==> smoke"
+  ./scripts/pay-smoke.sh
+else
+  echo "==> smoke skipped (scripts/pay-smoke.sh not found)"
+fi
 
-echo "==> done ✅"
-pm2 list || true
+echo "✅ deploy done"
+pm2 ls
