@@ -1,3 +1,4 @@
+// app/api/miniapp/bookings/route.ts
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
@@ -38,8 +39,25 @@ function parseNonEmptyString(v: unknown): string | null {
 
 const SLOT_MINUTES = 30
 
+// ✅ 至少提前“1个日历日”预约：今天只能约明天及以后（不要求满24小时）
+const MIN_ADVANCE_DAYS = 1
+
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
+}
+
+function addDays(date: Date, days: number) {
+  const d = new Date(date)
+  d.setDate(d.getDate() + days)
+  return d
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0')
+}
+
+function formatYMD(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
 
 function buildDayRange(dateStr: string) {
@@ -96,6 +114,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: '缺少必要字段' }, { status: 400 })
   }
 
+  // ✅ 提前“日历天”限制：今天只能约明天及以后（服务端强校验，防绕过）
+  const now = new Date()
+  const minDateStr = formatYMD(addDays(now, MIN_ADVANCE_DAYS))
+  if (date < minDateStr) {
+    return NextResponse.json({ ok: false, error: '需至少提前一天预约' }, { status: 400 })
+  }
+
   const startTime = buildStartTime(date, time)
   if (Number.isNaN(startTime.getTime())) {
     return NextResponse.json({ error: 'date/time 格式不正确' }, { status: 400 })
@@ -118,29 +143,19 @@ export async function POST(req: Request) {
         const duration = await getServiceDuration(tx, serviceId)
         const newEnd = addMinutes(startTime, duration)
 
+        // 查当天所有“仍占用时段”的单
         const exist = await tx.booking.findMany({
           where: {
             barberId,
             startTime: { gte: dayStart, lt: dayEnd },
             slotLock: true,
           },
-          select: { startTime: true, serviceId: true },
+          include: { service: { select: { durationMinutes: true } } },
           orderBy: { startTime: 'asc' },
         })
 
-        // 批量拿当日已有单的服务时长
-        const existServiceIds = Array.from(new Set(exist.map((b) => b.serviceId)))
-        const svcs = existServiceIds.length
-          ? await tx.service.findMany({
-              where: { id: { in: existServiceIds } },
-              select: { id: true, durationMinutes: true },
-            })
-          : []
-        const durMap = new Map<number, number>()
-        for (const s of svcs) durMap.set(s.id, s.durationMinutes ?? SLOT_MINUTES)
-
         const conflict = exist.some((b) => {
-          const dur = durMap.get(b.serviceId) ?? SLOT_MINUTES
+          const dur = b.service?.durationMinutes ?? SLOT_MINUTES
           const bEnd = addMinutes(b.startTime, dur)
           return startTime < bEnd && newEnd > b.startTime
         })
@@ -173,6 +188,7 @@ export async function POST(req: Request) {
 
         return { kind: 'ok' as const, booking }
       } catch (e: any) {
+        // 唯一约束撞了，就当冲突
         if (e?.code === 'P2002') return { kind: 'conflict' as const }
         throw e
       } finally {
