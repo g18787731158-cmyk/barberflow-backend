@@ -47,8 +47,14 @@ model booking {
   startTime   DateTime
   status      String    @default("SCHEDULED")
 
-  /// ✅ 占用锁：true = 占用时段；NULL = 不占用（取消后写 NULL）
+  /// ✅ 占用锁：true = 占用时段；false/NULL = 不占用
+  ///（保留 nullable 以兼容历史数据）
   slotLock    Boolean?  @default(true)
+
+  /// ✅ 真正的“时段唯一占用”键：
+  /// 只在 slotLock=true 时写入，例如：bf:{barberId}:{startTimeMillis}
+  /// 取消/完成释放时置为 NULL
+  slotKey     String?   @unique(map: "Booking_slotKey_key")
 
   completedAt DateTime?
   note        String?
@@ -68,13 +74,14 @@ model booking {
   shop        shop      @relation(fields: [shopId], references: [id], map: "Booking_shopId_fkey")
   ledger      ledger[]
 
-  /// ✅ 关键：只允许“占用锁=true”的同一时段存在一条；取消后 slotLock=NULL 就不冲突
-  @@unique([barberId, startTime, slotLock], map: "Booking_barberId_startTime_slotLock_key")
+  /// ❌ 删除这个！它会导致 cancel 时 slotLock=true->false 撞历史记录而 P2002
+  /// @@unique([barberId, startTime, slotLock], map: "Booking_barberId_startTime_slotLock_key")
 
   @@index([barberId], map: "Booking_barberId_idx")
   @@index([phone], map: "Booking_phone_idx")
   @@index([serviceId], map: "Booking_serviceId_idx")
   @@index([shopId], map: "Booking_shopId_idx")
+  @@index([barberId, startTime], map: "Booking_barberId_startTime_idx")
 }
 
 model service {

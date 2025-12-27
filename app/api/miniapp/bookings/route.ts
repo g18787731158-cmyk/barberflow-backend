@@ -4,7 +4,6 @@ import { STATUS } from '@/lib/status'
 import type { Prisma } from '@prisma/client'
 
 type Tx = Prisma.TransactionClient
-
 export const runtime = 'nodejs'
 
 type JsonObj = Record<string, unknown>
@@ -102,8 +101,11 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'date/time 格式不正确' }, { status: 400 })
   }
 
-  // ✅ “理发师 + 日期”做锁
+  // ✅ “理发师 + 日期”做锁（防并发插队）
   const lockKey = `bf:barber:${barberId}:${date}`
+
+  // ✅ slotKey：只在占用时段时写入，取消/完成会置空
+  const slotKey = `bf:${barberId}:${startTime.getTime()}`
 
   try {
     const result = await prisma.$transaction(async (tx) => {
@@ -119,6 +121,7 @@ export async function POST(req: Request) {
         const duration = await getServiceDuration(tx, serviceId)
         const newEnd = addMinutes(startTime, duration)
 
+        // 查当天所有“仍占用时段”的单
         const exist = await tx.booking.findMany({
           where: {
             barberId,
@@ -138,35 +141,33 @@ export async function POST(req: Request) {
 
         const finalPrice = await calcFinalPrice(tx, barberId, serviceId)
 
-const booking = await tx.booking.create({
-  data: {
-    shopId,
-    barberId,
-    serviceId,
-    startTime,
+        const booking = await tx.booking.create({
+          data: {
+            shopId,
+            barberId,
+            serviceId,
+            startTime,
 
-    status: STATUS.SCHEDULED,
-    slotLock: true,
+            status: STATUS.SCHEDULED,
+            slotLock: true,
+            slotKey, // ✅ 关键：写入唯一占用锁
 
-    userName,
-    phone,
-    source: 'miniapp',
+            userName,
+            phone,
+            source: 'miniapp',
 
-    // ✅ 订单金额：固定写死在订单上
-    price: finalPrice,
+            price: finalPrice,
+            payStatus: 'unpaid',
+            payAmount: finalPrice,
 
-    // ✅ 支付三件套：从“未支付”开始
-    payStatus: 'unpaid',
-    payAmount: finalPrice,
-
-    // ✅ 分账状态：先 pending（我们不做资金池）
-    splitStatus: 'pending',
-  },
-  include: { shop: true, barber: true, service: true },
-})
+            splitStatus: 'pending',
+          },
+          include: { shop: true, barber: true, service: true },
+        })
 
         return { kind: 'ok' as const, booking }
       } catch (e: any) {
+        // slotKey / 其他唯一约束撞了，就当冲突
         if (e?.code === 'P2002') return { kind: 'conflict' as const }
         throw e
       } finally {

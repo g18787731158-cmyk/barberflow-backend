@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+export const runtime = 'nodejs'
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
@@ -12,20 +14,19 @@ export async function POST(req: NextRequest) {
 
     const booking = await prisma.booking.findUnique({
       where: { id },
-      select: { id: true, status: true, slotLock: true },
+      select: { id: true, status: true, slotLock: true, slotKey: true },
     })
 
     if (!booking) {
       return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
     }
 
-    // ✅ 幂等：已取消就直接返回 ok
+    // ✅ 幂等：已取消就直接返回 ok（并兜底释放 slotKey）
     if (booking.status === 'CANCELED') {
-      // 顺手兜底：确保 slotLock=false
-      if (booking.slotLock) {
+      if (booking.slotLock || booking.slotKey) {
         await prisma.booking.update({
           where: { id },
-          data: { slotLock: false },
+          data: { slotLock: false, slotKey: null },
         })
       }
       return NextResponse.json({ ok: true, id, status: 'CANCELED', slotLock: false })
@@ -36,7 +37,7 @@ export async function POST(req: NextRequest) {
       data: {
         status: 'CANCELED',
         slotLock: false,
-        // 取消一般不留 completedAt；如果你希望保留历史完成时间可删掉这行
+        slotKey: null,      // ✅ 关键：释放占用
         completedAt: null,
       },
       select: { id: true, status: true, slotLock: true },
