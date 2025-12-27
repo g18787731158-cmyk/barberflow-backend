@@ -1,4 +1,3 @@
-// app/api/miniapp/bookings/route.ts
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
@@ -96,6 +95,10 @@ async function getServiceDuration(tx: Tx, serviceId: number) {
   return svc.durationMinutes ?? SLOT_MINUTES
 }
 
+function overlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
+  return aStart < bEnd && aEnd > bStart
+}
+
 export async function POST(req: Request) {
   const body = await readJson(req)
   if (!body) {
@@ -143,7 +146,41 @@ export async function POST(req: Request) {
         const duration = await getServiceDuration(tx, serviceId)
         const newEnd = addMinutes(startTime, duration)
 
-        // 查当天所有“仍占用时段”的单
+        // ✅ timeoff 强校验：休息/休假时段禁止下单（防绕过 slots）
+        const offs = await tx.barbertimeoff.findMany({
+          where: {
+            barberId,
+            enabled: true,
+            OR: [
+              { type: 'DAILY' },
+              { AND: [{ startAt: { lt: dayEnd } }, { endAt: { gt: dayStart } }] },
+            ],
+          },
+          orderBy: { id: 'desc' },
+        })
+
+        const blocked: Array<{ start: Date; end: Date }> = []
+        for (const o of offs) {
+          if (o.type === 'DAILY') {
+            if (
+              typeof o.startMinute === 'number' &&
+              typeof o.endMinute === 'number' &&
+              o.endMinute > o.startMinute
+            ) {
+              const s = new Date(dayStart.getTime() + o.startMinute * 60 * 1000)
+              const e = new Date(dayStart.getTime() + o.endMinute * 60 * 1000)
+              blocked.push({ start: s, end: e })
+            }
+          } else if (o.startAt && o.endAt && o.endAt > o.startAt) {
+            blocked.push({ start: o.startAt, end: o.endAt })
+          }
+        }
+
+        if (blocked.some((b) => overlap(startTime, newEnd, b.start, b.end))) {
+          return { kind: 'conflict' as const }
+        }
+
+        // 查当天所有“仍占用时段”的单（slotLock=true）
         const exist = await tx.booking.findMany({
           where: {
             barberId,
@@ -157,7 +194,7 @@ export async function POST(req: Request) {
         const conflict = exist.some((b) => {
           const dur = b.service?.durationMinutes ?? SLOT_MINUTES
           const bEnd = addMinutes(b.startTime, dur)
-          return startTime < bEnd && newEnd > b.startTime
+          return overlap(startTime, newEnd, b.startTime, bEnd)
         })
         if (conflict) return { kind: 'conflict' as const }
 
@@ -204,7 +241,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: '系统繁忙，请稍后再试' }, { status: 503 })
     }
     if (result.kind === 'conflict') {
-      return NextResponse.json({ ok: false, error: '该时段已被预约' }, { status: 409 })
+      return NextResponse.json({ ok: false, error: '该时段不可预约或已被预约' }, { status: 409 })
     }
 
     return NextResponse.json({ ok: true, booking: result.booking }, { status: 201 })

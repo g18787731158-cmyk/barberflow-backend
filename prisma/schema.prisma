@@ -16,9 +16,11 @@ model barber {
   workEndHour   Int
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
+
   shop          shop            @relation(fields: [shopId], references: [id], map: "Barber_shopId_fkey")
   barberservice barberservice[]
   booking       booking[]
+  timeoff       barbertimeoff[]
 
   @@index([shopId], map: "Barber_shopId_fkey")
 }
@@ -30,6 +32,7 @@ model barberservice {
   price     Int?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
   barber    barber   @relation(fields: [barberId], references: [id], map: "BarberService_barberId_fkey")
   service   service  @relation(fields: [serviceId], references: [id], map: "BarberService_serviceId_fkey")
 
@@ -84,6 +87,7 @@ model service {
   price           Int
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
+
   barberservice   barberservice[]
   booking         booking[]
 }
@@ -102,6 +106,7 @@ model shop {
   shopShareBasis     Int       @default(0)
   barberShareBasis   Int       @default(0)
   enableAutoSplit    Boolean   @default(false)
+
   barber             barber[]
   booking            booking[]
 }
@@ -120,4 +125,32 @@ model ledger {
   @@unique([bookingId, type], map: "Ledger_bookingId_type_key")
   @@index([bookingId], map: "Ledger_bookingId_idx")
   @@map("ledger_entries")
+}
+
+/// ✅ 理发师休假/休息规则
+/// type:
+/// - DATE_RANGE   ：某段日期全休（startAt=开始当天00:00，endAt=结束次日00:00）
+/// - DATE_PARTIAL ：某天部分时段休息（startAt/endAt 精确到时间）
+/// - DAILY        ：每天固定时段休息（startMinute/endMinute）
+model barbertimeoff {
+  id          Int      @id @default(autoincrement())
+  barberId    Int
+  type        String
+
+  startAt     DateTime?
+  endAt       DateTime?
+
+  startMinute Int?
+  endMinute   Int?
+
+  enabled     Boolean  @default(true)
+  note        String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  barber      barber   @relation(fields: [barberId], references: [id], map: "BarberTimeOff_barberId_fkey")
+
+  @@index([barberId], map: "BarberTimeOff_barberId_idx")
+  @@map("barber_timeoff")
 }
