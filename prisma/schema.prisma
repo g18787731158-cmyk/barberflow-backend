@@ -71,7 +71,6 @@ model booking {
   shop        shop      @relation(fields: [shopId], references: [id], map: "Booking_shopId_fkey")
   ledger      ledger[]
 
-  /// ✅ 关键：只允许“占用锁=true”的同一时段存在一条；取消后 slotLock=NULL 就不冲突
   @@unique([barberId, startTime, slotLock], map: "Booking_barberId_startTime_slotLock_key")
 
   @@index([barberId], map: "Booking_barberId_idx")
@@ -114,9 +113,9 @@ model shop {
 model ledger {
   id        Int      @id @default(autoincrement())
   bookingId Int
-  type      String // SETTLE / REFUND / ADJUST ...
+  type      String
   amount    Int
-  status    String   @default("CREATED") // CREATED / SUCCESS / FAILED ...
+  status    String   @default("CREATED")
   detail    String?
   createdAt DateTime @default(now())
 

@@ -1,164 +1,153 @@
+// app/api/miniapp/available-slots/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
 export const runtime = 'nodejs'
 
 const SLOT_MINUTES = 30
-const DEFAULT_WORK_START = 10
-const DEFAULT_WORK_END = 21
-
-// ✅ 至少提前“1个日历日”预约：今天只能约明天及以后
-const MIN_ADVANCE_DAYS = 1
+const MIN_ADVANCE_DAYS = 1 // 今天只能约明天及以后（不要求满24小时）
 
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
 }
+
 function addDays(date: Date, days: number) {
   const d = new Date(date)
   d.setDate(d.getDate() + days)
   return d
 }
+
 function pad2(n: number) {
   return String(n).padStart(2, '0')
 }
+
 function formatYMD(d: Date) {
   return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
 }
-function toHM(d: Date) {
-  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`
-}
-function buildDay(dateStr: string) {
+
+function buildDayRange(dateStr: string) {
   const [y, m, d] = dateStr.split('-').map(Number)
-  const dayStart = new Date(y, m - 1, d, 0, 0, 0)
-  const dayEnd = new Date(y, m - 1, d + 1, 0, 0, 0)
-  return { dayStart, dayEnd, y, m, d }
+  const start = new Date(y, m - 1, d, 0, 0, 0)
+  const end = new Date(y, m - 1, d + 1, 0, 0, 0)
+  return { start, end }
 }
-function parsePosInt(v: string | null) {
-  if (!v) return null
-  const n = Number(v)
-  if (Number.isInteger(n) && n > 0) return n
-  return null
+
+// "2025-12-06" + "14:30" => Date（按服务器时区）
+function buildStartTime(dateStr: string, timeStr: string): Date {
+  return new Date(`${dateStr}T${timeStr}:00`)
 }
+
+function minutesSince00(d: Date) {
+  return d.getHours() * 60 + d.getMinutes()
+}
+
 function overlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
   return aStart < bEnd && aEnd > bStart
 }
 
 export async function GET(req: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url)
-    const date = searchParams.get('date')
-    const barberId = parsePosInt(searchParams.get('barberId'))
-    const serviceId = parsePosInt(searchParams.get('serviceId'))
+    const date = req.nextUrl.searchParams.get('date') || ''
+    const barberId = Number(req.nextUrl.searchParams.get('barberId') || '')
+    const serviceId = Number(req.nextUrl.searchParams.get('serviceId') || '')
 
-    if (!date || !barberId) {
-      return NextResponse.json({ error: 'date / barberId 必填' }, { status: 400 })
+    if (!date || !barberId || !serviceId || Number.isNaN(barberId) || Number.isNaN(serviceId)) {
+      return NextResponse.json({ error: 'Missing date/barberId/serviceId' }, { status: 400 })
     }
 
-    // ✅ 提前“日历天”限制
     const now = new Date()
     const minDateStr = formatYMD(addDays(now, MIN_ADVANCE_DAYS))
-    const tooSoon = date < minDateStr
+    const calendarTooEarly = date < minDateStr
 
-    const barber = await prisma.barber.findUnique({
-      where: { id: barberId },
-      select: { workStartHour: true, workEndHour: true },
-    })
-    const workStartHour = barber?.workStartHour ?? DEFAULT_WORK_START
-    const workEndHour = barber?.workEndHour ?? DEFAULT_WORK_END
+    const { start: dayStart, end: dayEnd } = buildDayRange(date)
 
-    let wantedDuration = SLOT_MINUTES
-    if (serviceId) {
-      const svc = await prisma.service.findUnique({
+    const [barber, service, bookings, timeoffs] = await prisma.$transaction([
+      prisma.barber.findUnique({
+        where: { id: barberId },
+        select: { id: true, workStartHour: true, workEndHour: true },
+      }),
+      prisma.service.findUnique({
         where: { id: serviceId },
-        select: { durationMinutes: true },
-      })
-      if (svc?.durationMinutes && svc.durationMinutes > 0) wantedDuration = svc.durationMinutes
-    }
+        select: { id: true, durationMinutes: true },
+      }),
+      prisma.booking.findMany({
+        where: {
+          barberId,
+          startTime: { gte: dayStart, lt: dayEnd },
+          slotLock: true,
+        },
+        include: { service: { select: { durationMinutes: true } } },
+        orderBy: { startTime: 'asc' },
+      }),
+      prisma.barbertimeoff.findMany({
+        where: { barberId, enabled: true },
+        orderBy: { id: 'desc' },
+      }),
+    ])
 
-    const { dayStart, dayEnd, y, m, d } = buildDay(date)
-    const slotsStart = new Date(y, m - 1, d, workStartHour, 0, 0)
-    const slotsEnd = new Date(y, m - 1, d, workEndHour, 0, 0)
+    if (!barber) return NextResponse.json({ error: 'barber not found' }, { status: 404 })
+    if (!service) return NextResponse.json({ error: 'service not found' }, { status: 404 })
 
-    // 1) booking 占用（slotLock=true）
-    const exist = await prisma.booking.findMany({
-      where: {
-        barberId,
-        startTime: { gte: dayStart, lt: dayEnd },
-        slotLock: true,
-      },
-      include: { service: { select: { durationMinutes: true } } },
-      orderBy: { startTime: 'asc' },
-    })
-    const occupied = exist.map((b) => {
-      const dur = b.service?.durationMinutes ?? SLOT_MINUTES
-      return { start: b.startTime, end: addMinutes(b.startTime, dur) }
-    })
+    const duration = service.durationMinutes ?? SLOT_MINUTES
 
-    // 2) timeoff 休息/休假（enabled=true）
-    const offs = await prisma.barbertimeoff.findMany({
-      where: {
-        barberId,
-        enabled: true,
-        OR: [
-          { type: 'DAILY' },
-          { AND: [{ startAt: { lt: dayEnd } }, { endAt: { gt: dayStart } }] },
-        ],
-      },
-      orderBy: { id: 'desc' },
-    })
+    // 生成 slots：从 workStartHour 到 workEndHour（最后一个 slot 必须能放下服务时长）
+    const slots: Array<{ time: string; label: string; disabled: boolean }> = []
 
-    const blocked: Array<{ start: Date; end: Date }> = []
-    for (const o of offs) {
-      if (o.type === 'DAILY') {
-        if (
-          typeof o.startMinute === 'number' &&
-          typeof o.endMinute === 'number' &&
-          o.endMinute > o.startMinute
-        ) {
-          const s = new Date(dayStart.getTime() + o.startMinute * 60 * 1000)
-          const e = new Date(dayStart.getTime() + o.endMinute * 60 * 1000)
-          blocked.push({ start: s, end: e })
+    const startH = barber.workStartHour ?? 10
+    const endH = barber.workEndHour ?? 21
+
+    for (let h = startH; h <= endH; h++) {
+      for (const m of [0, 30]) {
+        const time = `${pad2(h)}:${pad2(m)}`
+        const st = buildStartTime(date, time)
+        if (Number.isNaN(st.getTime())) continue
+
+        const en = addMinutes(st, duration)
+
+        // 超出营业结束
+        const endBoundary = new Date(dayStart)
+        endBoundary.setHours(endH, 0, 0, 0)
+        if (en > endBoundary) continue
+
+        let disabled = false
+
+        // ✅ 日历天提前预约规则：今天不能约今天
+        if (calendarTooEarly) disabled = true
+
+        // ✅ timeoff 规则
+        if (!disabled && timeoffs.length) {
+          const hit = timeoffs.some((t) => {
+            if (t.type === 'DATE_RANGE' || t.type === 'DATE_PARTIAL') {
+              if (!t.startAt || !t.endAt) return false
+              return overlap(st, en, t.startAt, t.endAt)
+            }
+            if (t.type === 'DAILY') {
+              if (typeof t.startMinute !== 'number' || typeof t.endMinute !== 'number') return false
+              const sMin = minutesSince00(st)
+              const eMin = sMin + duration
+              return sMin < t.endMinute && eMin > t.startMinute
+            }
+            return false
+          })
+          if (hit) disabled = true
         }
-      } else if (o.startAt && o.endAt && o.endAt > o.startAt) {
-        blocked.push({ start: o.startAt, end: o.endAt })
+
+        // ✅ booking 冲突（按服务时长重叠）
+        if (!disabled && bookings.length) {
+          const conflict = bookings.some((b) => {
+            const dur = b.service?.durationMinutes ?? SLOT_MINUTES
+            const bEnd = addMinutes(b.startTime, dur)
+            return overlap(st, en, b.startTime, bEnd)
+          })
+          if (conflict) disabled = true
+        }
+
+        slots.push({ time, label: time, disabled })
       }
     }
 
-    const out: Array<{ time: string; label: string; disabled: boolean }> = []
-
-    for (let t = new Date(slotsStart); t < slotsEnd; t = addMinutes(t, SLOT_MINUTES)) {
-      const end = addMinutes(t, wantedDuration)
-      let disabled = false
-
-      if (tooSoon) disabled = true
-      if (!disabled && end > slotsEnd) disabled = true
-
-      // 休息/休假挡掉
-      if (!disabled) {
-        for (const b of blocked) {
-          if (overlap(t, end, b.start, b.end)) {
-            disabled = true
-            break
-          }
-        }
-      }
-
-      // booking 占用挡掉
-      if (!disabled) {
-        for (const o of occupied) {
-          if (overlap(t, end, o.start, o.end)) {
-            disabled = true
-            break
-          }
-        }
-      }
-
-      const hm = toHM(t)
-      out.push({ time: hm, label: hm, disabled })
-    }
-
-    return NextResponse.json(out, { status: 200 })
-  } catch (e) {
+    return NextResponse.json(slots)
+  } catch (e: any) {
     console.error('[miniapp/available-slots] error:', e)
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 })
   }
