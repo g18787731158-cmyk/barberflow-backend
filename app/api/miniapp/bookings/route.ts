@@ -1,3 +1,4 @@
+// app/api/miniapp/bookings/route.ts
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
@@ -104,9 +105,6 @@ export async function POST(req: Request) {
   // ✅ “理发师 + 日期”做锁（防并发插队）
   const lockKey = `bf:barber:${barberId}:${date}`
 
-  // ✅ slotKey：只在占用时段时写入，取消/完成会置空
-  const slotKey = `bf:${barberId}:${startTime.getTime()}`
-
   try {
     const result = await prisma.$transaction(async (tx) => {
       const gotRows = await tx.$queryRaw<Array<{ got: any }>>`
@@ -121,7 +119,7 @@ export async function POST(req: Request) {
         const duration = await getServiceDuration(tx, serviceId)
         const newEnd = addMinutes(startTime, duration)
 
-        // 查当天所有“仍占用时段”的单
+        // 当天所有“仍占用时段”的单（slotLock=true）
         const exist = await tx.booking.findMany({
           where: {
             barberId,
@@ -132,6 +130,7 @@ export async function POST(req: Request) {
           orderBy: { startTime: 'asc' },
         })
 
+        // ✅ 重叠判断：90min 不会被插队
         const conflict = exist.some((b) => {
           const dur = b.service?.durationMinutes ?? SLOT_MINUTES
           const bEnd = addMinutes(b.startTime, dur)
@@ -150,16 +149,19 @@ export async function POST(req: Request) {
 
             status: STATUS.SCHEDULED,
             slotLock: true,
-            slotKey, // ✅ 关键：写入唯一占用锁
 
             userName,
             phone,
             source: 'miniapp',
 
+            // ✅ 订单金额：写死在订单上
             price: finalPrice,
+
+            // ✅ 支付三件套：从“未支付”开始
             payStatus: 'unpaid',
             payAmount: finalPrice,
 
+            // ✅ 分账状态：先 pending
             splitStatus: 'pending',
           },
           include: { shop: true, barber: true, service: true },
@@ -167,7 +169,6 @@ export async function POST(req: Request) {
 
         return { kind: 'ok' as const, booking }
       } catch (e: any) {
-        // slotKey / 其他唯一约束撞了，就当冲突
         if (e?.code === 'P2002') return { kind: 'conflict' as const }
         throw e
       } finally {
