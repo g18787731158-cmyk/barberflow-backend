@@ -1,3 +1,22 @@
+-- ✅ FIX: ensure `completedAt` exists (for shadow db apply)
+SET @bf_has_completedAt := (
+  SELECT COUNT(*)
+  FROM INFORMATION_SCHEMA.COLUMNS
+  WHERE TABLE_SCHEMA = DATABASE()
+    AND TABLE_NAME = 'booking'
+    AND COLUMN_NAME = 'completedAt'
+);
+
+SET @bf_sql := IF(
+  @bf_has_completedAt = 0,
+  'ALTER TABLE `booking` ADD COLUMN `completedAt` DATETIME(3) NULL;',
+  'SELECT 1;'
+);
+
+PREPARE stmt FROM @bf_sql;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
 -- patch: ensure completedAt exists when replaying migrations on shadow db
 ALTER TABLE `booking` ADD COLUMN `completedAt` DATETIME(3) NULL;
 
