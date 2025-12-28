@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 
 type DashboardData = any
@@ -110,6 +111,31 @@ export default function AdminDashboardPage() {
         </div>
       </div>
 
+      {/* ✅ 快捷入口（新增） */}
+      <div className="mb-6 grid gap-4 md:grid-cols-2">
+        <Link
+          href="/admin/settings/shop"
+          className="rounded-2xl border border-neutral-800 bg-neutral-900/70 px-4 py-4 hover:bg-neutral-800/60 transition"
+        >
+          <div className="text-sm text-neutral-400 mb-1">设置</div>
+          <div className="text-lg font-semibold">店铺设置</div>
+          <div className="mt-1 text-sm text-neutral-400">
+            配置平台费率 / 理发师提成
+          </div>
+        </Link>
+
+        <Link
+          href="/admin/settlements"
+          className="rounded-2xl border border-neutral-800 bg-neutral-900/70 px-4 py-4 hover:bg-neutral-800/60 transition"
+        >
+          <div className="text-sm text-neutral-400 mb-1">账本</div>
+          <div className="text-lg font-semibold">结算账本</div>
+          <div className="mt-1 text-sm text-neutral-400">
+            查看每单结算明细与拆分
+          </div>
+        </Link>
+      </div>
+
       {/* 当前日期标签 */}
       <div className="mb-4 text-sm text-neutral-400">
         当前日期：<span className="font-medium text-neutral-100">{formatDateLabel(date)}</span>
@@ -198,7 +224,7 @@ export default function AdminDashboardPage() {
         </div>
       )}
 
-      {/* 兜底：如果我们不确定数据结构，就把完整 JSON 打印出来，至少你能看到内容 */}
+      {/* 兜底：如果我们不确定数据结构，就把完整 JSON 打印出来 */}
       {data && (
         <div className="mt-6 rounded-2xl border border-neutral-800 bg-neutral-900/80 px-4 py-3 text-xs text-neutral-300">
           <div className="mb-2 font-medium text-neutral-400">
