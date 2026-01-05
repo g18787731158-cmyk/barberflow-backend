@@ -1,6 +1,5 @@
-import { NextResponse } from 'next/server'
+import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { STATUS, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -10,16 +9,16 @@ function isJsonObj(v: unknown): v is JsonObj {
   return typeof v === 'object' && v !== null
 }
 
-async function readJson(req: Request): Promise<JsonObj | null> {
+async function readJson(req: NextRequest): Promise<JsonObj> {
   try {
     const v = await req.json()
-    return isJsonObj(v) ? v : null
+    return isJsonObj(v) ? v : {}
   } catch {
-    return null
+    return {}
   }
 }
 
-function parseId(v: unknown): number | null {
+function parsePosInt(v: unknown): number | null {
   if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
   if (typeof v === 'string' && v.trim()) {
     const n = Number(v)
@@ -28,178 +27,136 @@ function parseId(v: unknown): number | null {
   return null
 }
 
-function clampInt(n: unknown, min: number, max: number, fallback = 0) {
-  const x = typeof n === 'number' ? n : Number(n)
-  if (!Number.isFinite(x)) return fallback
-  const y = Math.trunc(x)
-  if (y < min) return min
-  if (y > max) return max
-  return y
+function clampBps(n: any) {
+  const x = Number(n ?? 0)
+  if (!Number.isFinite(x)) return 0
+  return Math.max(0, Math.min(10000, Math.trunc(x)))
 }
 
-// bps: 200=2%，万分比
-function calcFee(amount: number, bps: number) {
-  if (amount <= 0 || bps <= 0) return 0
-  return Math.floor((amount * bps) / 10000)
-}
-
-// 取“订单金额(分)”：price > payAmount > service.price > 0
-function getAmountTotal(row: {
-  price: number | null
-  payAmount: number
-  servicePrice: number | null
-}) {
-  if (typeof row.price === 'number' && Number.isFinite(row.price) && row.price > 0) return Math.trunc(row.price)
-  if (typeof row.payAmount === 'number' && Number.isFinite(row.payAmount) && row.payAmount > 0) return Math.trunc(row.payAmount)
-  if (typeof row.servicePrice === 'number' && Number.isFinite(row.servicePrice) && row.servicePrice > 0) return Math.trunc(row.servicePrice)
-  return 0
-}
-
-/**
- * settle 目标（务实版）：
- * 1) 只对 COMPLETED 订单结算
- * 2) 确保 completedAt 有值（没有就补）
- * 3) 幂等：同一 booking 只维护一条 ledger(type='SETTLE')
- * 4) ledger.detail 里写明细：总额/平台费/理发师提成/店铺净额
- * 5) 平台抽成默认 0（来自 shop.platformShareBasis，默认就是 0）
- */
-export async function POST(req: Request) {
-  const body = await readJson(req)
-  if (!body) {
-    return NextResponse.json({ ok: false, error: '请求体必须是 JSON 对象' }, { status: 400 })
-  }
-
-  const bookingId = parseId(body.bookingId ?? body.id)
-  if (!bookingId) {
-    return NextResponse.json({ ok: false, error: '缺少预约 id' }, { status: 400 })
-  }
-
-  const now = new Date()
-
+export async function POST(req: NextRequest) {
   try {
+    const body = await readJson(req)
+    const id = parsePosInt(body.id ?? body.bookingId)
+
+    if (!id) {
+      return NextResponse.json({ ok: false, error: 'Missing or invalid id' }, { status: 400 })
+    }
+
     const result = await prisma.$transaction(async (tx) => {
-      const existing = await tx.booking.findUnique({
-        where: { id: bookingId },
+      const booking = await tx.booking.findUnique({
+        where: { id },
         select: {
           id: true,
           status: true,
           completedAt: true,
-          slotLock: true,
-          updatedAt: true,
-
-          shopId: true,
-          barberId: true,
-
           price: true,
-          payAmount: true,
-          service: { select: { price: true } },
+          shopId: true,
           shop: {
             select: {
-              platformShareBasis: true, // bps，默认 0
-              barberShareBasis: true,   // bps，默认 0（先留着）
+              platformShareBasis: true,
+              barberShareBasis: true,
+              shopShareBasis: true,
             },
           },
+          service: { select: { price: true } },
         },
       })
 
-      if (!existing) return { notFound: true as const }
+      if (!booking) return { kind: 'notfound' as const }
 
-      const st = canonStatus(existing.status)
-      if (st !== STATUS.COMPLETED) {
-        return {
-          ok: true as const,
-          settled: false as const,
-          reason: 'ONLY_COMPLETED_CAN_SETTLE' as const,
-          booking: {
-            id: existing.id,
-            status: existing.status,
-            completedAt: existing.completedAt,
-            updatedAt: existing.updatedAt,
-          },
-        }
+      const st = String(booking.status || '').toUpperCase()
+      if (st !== 'COMPLETED') {
+        return { kind: 'not_completed' as const }
       }
 
-      // 1) 补齐 completedAt / slotLock（幂等）
       let patchedCompletedAt = false
-      if (!existing.completedAt || existing.slotLock) {
+      if (!booking.completedAt) {
         await tx.booking.update({
-          where: { id: existing.id },
-          data: {
-            completedAt: existing.completedAt ?? now,
-            slotLock: false,
-          },
+          where: { id },
+          data: { completedAt: new Date() },
+          select: { id: true },
         })
-        patchedCompletedAt = !existing.completedAt
+        patchedCompletedAt = true
       }
 
-      // 2) 算金额（分）
-      const amountTotal = getAmountTotal({
-        price: existing.price ?? null,
-        payAmount: existing.payAmount ?? 0,
-        servicePrice: existing.service?.price ?? null,
-      })
+      const amountTotal = Number(booking.price ?? booking.service?.price ?? 0)
+      if (!Number.isFinite(amountTotal) || amountTotal <= 0) {
+        return { kind: 'bad_amount' as const }
+      }
 
-      // 3) 读取费率（bps 万分比），默认 0
-      const platformFeeBps = clampInt(existing.shop?.platformShareBasis ?? 0, 0, 10000, 0)
-      const barberFeeBps = clampInt(existing.shop?.barberShareBasis ?? 0, 0, 10000, 0)
+      const platformFeeBps = clampBps(booking.shop?.platformShareBasis)
+      const barberFeeBps = clampBps(booking.shop?.barberShareBasis)
 
-      // 4) 计算拆分
-      const platformFeeAmount = calcFee(amountTotal, platformFeeBps)
-      const barberFeeBase = Math.max(0, amountTotal - platformFeeAmount)
-      const barberFeeAmount = calcFee(barberFeeBase, barberFeeBps)
-      const shopAmount = Math.max(0, amountTotal - platformFeeAmount - barberFeeAmount)
+      const platformFeeAmount = Math.floor((amountTotal * platformFeeBps) / 10000)
+      const barberFeeAmount = Math.floor((amountTotal * barberFeeBps) / 10000)
+      const shopAmount = amountTotal - platformFeeAmount - barberFeeAmount
 
       const breakdown = {
-        amountTotal,                 // 订单总额(分)
-        platformFeeBps,              // 平台费率(bps)
-        platformFeeAmount,           // 平台金额(分)
-        barberFeeBps,                // 理发师提成率(bps)
-        barberFeeAmount,             // 理发师金额(分)
-        shopAmount,                  // 店铺净额(分)
+        amountTotal,
+        platformFeeBps,
+        platformFeeAmount,
+        barberFeeBps,
+        barberFeeAmount,
+        shopAmount,
         basis: 'bps/10000',
-        computedAt: now.toISOString(),
+        computedAt: new Date().toISOString(),
       }
 
-      // 5) 写入账本（幂等 upsert）
+      // ✅ 幂等：同一 bookingId 的 SETTLE 只允许一条
       const ledger = await tx.ledger.upsert({
-        where: { bookingId_type: { bookingId: existing.id, type: 'SETTLE' } },
-        update: {
-          amount: amountTotal,
-          detail: JSON.stringify(breakdown),
-          status: 'CREATED',
-        },
+        where: { bookingId_type: { bookingId: id, type: 'SETTLE' } },
         create: {
-          bookingId: existing.id,
+          bookingId: id,
           type: 'SETTLE',
           amount: amountTotal,
           status: 'CREATED',
           detail: JSON.stringify(breakdown),
         },
+        update: {
+          amount: amountTotal,
+          status: 'CREATED',
+          detail: JSON.stringify(breakdown),
+        },
+      })
+
+      await tx.booking.update({
+        where: { id },
+        data: {
+          splitStatus: 'settled',
+          splitDetail: JSON.stringify(breakdown),
+        },
+        select: { id: true },
       })
 
       return {
-        ok: true as const,
-        settled: true as const,
+        kind: 'ok' as const,
+        settled: true,
         patchedCompletedAt,
         booking: {
-          id: existing.id,
-          status: existing.status,
-          completedAt: existing.completedAt ?? now,
+          id: booking.id,
+          status: 'COMPLETED',
+          completedAt: (booking.completedAt ?? new Date()).toISOString(),
         },
         ledger,
         breakdown,
       }
     })
 
-    if ((result as any)?.notFound) {
-      return NextResponse.json({ ok: false, error: '预约不存在' }, { status: 404 })
+    if (result.kind === 'notfound') {
+      return NextResponse.json({ ok: false, error: 'Booking not found' }, { status: 404 })
+    }
+    if (result.kind === 'not_completed') {
+      return NextResponse.json({ ok: false, error: 'Booking not completed' }, { status: 409 })
+    }
+    if (result.kind === 'bad_amount') {
+      return NextResponse.json({ ok: false, error: 'Invalid booking amount' }, { status: 400 })
     }
 
-    return NextResponse.json(result)
-  } catch (e: any) {
-    console.error('[settle] error:', e)
+    return NextResponse.json({ ok: true, ...result })
+  } catch (err: any) {
+    console.error('[bookings/settle] error:', err)
     return NextResponse.json(
-      { ok: false, error: 'settle 失败', code: e?.code || null, detail: e?.message || null },
+      { ok: false, error: 'Internal Server Error', detail: err?.message },
       { status: 500 },
     )
   }

@@ -1,50 +1,23 @@
-// lib/status.ts
 export const STATUS = {
   SCHEDULED: 'SCHEDULED',
   CONFIRMED: 'CONFIRMED',
   COMPLETED: 'COMPLETED',
-  CANCELLED: 'CANCELLED',
+  // 统一用 CANCELED（你数据库/接口也在用这个）
+  CANCELLED: 'CANCELED',
 } as const
 
-export type CanonStatus = (typeof STATUS)[keyof typeof STATUS]
+// ✅ 给 status/route.ts 用的类型（之前缺的就是它）
+export type CanonStatus = (typeof STATUS)[keyof typeof STATUS] | string
 
-export function normStatus(v: unknown): string {
-  return String(v ?? '').trim().toUpperCase()
-}
+export function canonStatus(raw: unknown): CanonStatus {
+  const s = String(raw ?? '').trim().toUpperCase()
+  if (!s) return ''
 
-// 把历史值映射到统一大写（兼容旧值/别名）
-export function canonStatus(v: unknown): CanonStatus | 'UNKNOWN' {
-  const s = normStatus(v)
-  if (!s) return 'UNKNOWN'
+  if (s === 'CANCELLED') return 'CANCELED'
+  if (s === 'CANCELED') return 'CANCELED'
+  if (s === 'SCHEDULED') return 'SCHEDULED'
+  if (s === 'CONFIRMED') return 'CONFIRMED'
+  if (s === 'COMPLETED') return 'COMPLETED'
 
-  // 预约中
-  if (s === 'SCHEDULED' || s === 'BOOKED' || s === 'PENDING') return STATUS.SCHEDULED
-
-  // 已确认
-  if (s === 'CONFIRMED') return STATUS.CONFIRMED
-
-  // 已完成
-  if (s === 'COMPLETED' || s === 'DONE') return STATUS.COMPLETED
-
-  // 已取消（兼容美式拼写/简写）
-  if (s === 'CANCELLED' || s === 'CANCELED' || s === 'CANCEL') return STATUS.CANCELLED
-
-  return 'UNKNOWN'
-}
-
-export function isCancelled(v: unknown): boolean {
-  return canonStatus(v) === STATUS.CANCELLED
-}
-
-export function isCompleted(v: unknown): boolean {
-  return canonStatus(v) === STATUS.COMPLETED
-}
-
-export function statusLabelZh(v: unknown): string {
-  const c = canonStatus(v)
-  if (c === STATUS.COMPLETED) return '已完成'
-  if (c === STATUS.CANCELLED) return '已取消'
-  if (c === STATUS.CONFIRMED) return '已确认'
-  if (c === STATUS.SCHEDULED) return '已预约'
-  return normStatus(v) || '-'
+  return s
 }

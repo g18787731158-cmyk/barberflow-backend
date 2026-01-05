@@ -91,6 +91,10 @@ async function safeJson(res: Response) {
   }
 }
 
+function pickErr(data: any) {
+  return data?.error || data?.message || data?.msg || (typeof data?.raw === 'string' ? data.raw : '')
+}
+
 export default function AdminBookingsPage() {
   const [date, setDate] = useState<string>(() => formatDate(new Date()))
   const [range, setRange] = useState<Range>('day')
@@ -101,23 +105,20 @@ export default function AdminBookingsPage() {
   const [loading, setLoading] = useState(false)
   const [message, setMessage] = useState<string>('')
 
-  // 仅锁定某一行按钮的 loading（避免全页都“灰”）
+  // 仅锁定某一行按钮的 loading
   const [actioning, setActioning] = useState<{
     id: number
     kind: 'complete' | 'settle' | 'complete_settle' | 'cancel'
   } | null>(null)
 
-  // 状态筛选：全部 / 已预约 / 已完成 / 已取消
   const [statusFilter, setStatusFilter] = useState<
     'all' | 'scheduled' | 'completed' | 'cancelled'
   >('all')
 
-  // 来源筛选：全部 / 小程序 / 网页 / 门店
   const [sourceFilter, setSourceFilter] = useState<
     'all' | 'miniapp' | 'web' | 'admin'
   >('all')
 
-  // 手动创建预约表单
   const [newBooking, setNewBooking] = useState<{
     barberId: string
     time: string
@@ -130,7 +131,6 @@ export default function AdminBookingsPage() {
     phone: '',
   })
 
-  // 按状态 + 来源筛选后的预约列表（✅ 全部统一用 canonStatus）
   const filteredBookings = useMemo(() => {
     return bookings.filter((bk) => {
       const st = canonStatus(bk.status)
@@ -154,7 +154,6 @@ export default function AdminBookingsPage() {
     })
   }, [bookings, statusFilter, sourceFilter])
 
-  // 根据当前列表做统计：总预约数 + 营业额
   const stats = useMemo(() => {
     const result = {
       total: filteredBookings.length,
@@ -178,7 +177,6 @@ export default function AdminBookingsPage() {
     for (const bk of filteredBookings) {
       const name = bk.barber?.name || '未指定理发师'
       const price = computePrice(bk)
-
       const st = canonStatus(bk.status)
 
       let item = map.get(name)
@@ -258,7 +256,7 @@ export default function AdminBookingsPage() {
 
       if (!res.ok) {
         console.error('fetch /api/admin/bookings error:', data)
-        setMessage((data as any)?.error || '获取预约列表失败')
+        setMessage(pickErr(data) || '获取预约列表失败')
         setBookings([])
         return
       }
@@ -287,7 +285,7 @@ export default function AdminBookingsPage() {
 
       if (!res.ok) {
         console.error('update-status error:', data)
-        setMessage((data as any)?.error || '更新预约状态失败')
+        setMessage(pickErr(data) || '更新预约状态失败')
         return
       }
 
@@ -335,9 +333,9 @@ export default function AdminBookingsPage() {
       if (!res.ok) {
         console.error('create booking from admin error:', data)
         if (res.status === 409) {
-          setMessage((data as any)?.error || '该时间段已被预约，请换一个时间')
+          setMessage(pickErr(data) || '该时间段已被预约，请换一个时间')
         } else {
-          setMessage((data as any)?.error || '创建预约失败')
+          setMessage(pickErr(data) || '创建预约失败')
         }
         return
       }
@@ -426,15 +424,15 @@ export default function AdminBookingsPage() {
     }
   }
 
-  // ✅ 新增：完成 / 结算 / 完成并结算 / 取消（都走业务 API）
+  // ✅ 业务 API：关键修复点在这里 —— 统一传 { id }，并兼容 bookingId
   async function apiComplete(bookingId: number) {
     const res = await fetch('/api/bookings/complete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookingId }),
+      body: JSON.stringify({ id: bookingId, bookingId }),
     })
     const data = await safeJson(res)
-    if (!res.ok) throw new Error((data as any)?.error || `完成失败：${res.status}`)
+    if (!res.ok) throw new Error(pickErr(data) || `完成失败：${res.status}`)
     return data
   }
 
@@ -442,10 +440,10 @@ export default function AdminBookingsPage() {
     const res = await fetch('/api/bookings/cancel', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookingId }),
+      body: JSON.stringify({ id: bookingId, bookingId }),
     })
     const data = await safeJson(res)
-    if (!res.ok) throw new Error((data as any)?.error || `取消失败：${res.status}`)
+    if (!res.ok) throw new Error(pickErr(data) || `取消失败：${res.status}`)
     return data
   }
 
@@ -453,10 +451,10 @@ export default function AdminBookingsPage() {
     const res = await fetch('/api/bookings/settle', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ bookingId }),
+      body: JSON.stringify({ id: bookingId, bookingId }),
     })
     const data = await safeJson(res)
-    if (!res.ok) throw new Error((data as any)?.error || `结算失败：${res.status}`)
+    if (!res.ok) throw new Error(pickErr(data) || `结算失败：${res.status}`)
     return data
   }
 
@@ -497,7 +495,6 @@ export default function AdminBookingsPage() {
       if (data?.settled) {
         setMessage(`✅ #${bookingId} 已结算`)
       } else {
-        // 兜底：即使没 settled，也把返回展示给你排障
         setMessage(`⚠️ #${bookingId} 结算返回：${JSON.stringify(data)}`)
       }
     } catch (e: any) {
@@ -512,10 +509,7 @@ export default function AdminBookingsPage() {
       setActioning({ id: bookingId, kind: 'complete_settle' })
       setMessage('')
 
-      // 1) complete（写入 completedAt）
       await apiComplete(bookingId)
-
-      // 2) settle（按店铺提成配置生成 ledger）
       const data: any = await apiSettle(bookingId)
 
       await fetchBookings(date, selectedBarberId, range)
@@ -620,7 +614,6 @@ export default function AdminBookingsPage() {
           </div>
         )}
 
-        {/* 顶部统计 */}
         <div className="grid gap-3 md:grid-cols-4">
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
             <div className="text-xs text-neutral-400 mb-1">{dateLabel}</div>
@@ -640,7 +633,6 @@ export default function AdminBookingsPage() {
           </div>
         </div>
 
-        {/* 筛选 + 理发师 */}
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 text-sm">
@@ -690,7 +682,6 @@ export default function AdminBookingsPage() {
             </div>
           </div>
 
-          {/* 手动创建预约 */}
           <div className="border-t border-neutral-800 pt-3">
             <div className="text-sm font-medium mb-2">门店手动加单</div>
             <div className="grid gap-2 md:grid-cols-5">
@@ -744,7 +735,6 @@ export default function AdminBookingsPage() {
           </div>
         </div>
 
-        {/* 列表 */}
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 overflow-hidden">
           <div className="px-4 py-3 border-b border-neutral-800 flex items-center justify-between">
             <div className="text-sm font-medium">预约列表（筛选后 {filteredBookings.length} 条）</div>
@@ -801,7 +791,6 @@ export default function AdminBookingsPage() {
                       <td className="px-4 py-2">{statusLabel(bk.status)}</td>
                       <td className="px-4 py-2">{sourceLabel(bk.source)}</td>
 
-                      {/* ✅ 操作列：完成 / 结算 / 完成并结算 / 取消 */}
                       <td className="px-4 py-2 text-right">
                         <div className="inline-flex items-center gap-2">
                           {canComplete && (
@@ -841,7 +830,7 @@ export default function AdminBookingsPage() {
                               className="text-xs px-2.5 py-1 rounded-md border border-red-500/60 text-red-200 hover:bg-red-500/10 disabled:opacity-50"
                             >
                               {busyKind === 'cancel' ? '取消中…' : '取消'}
-                            </button>
+                              </button>
                           )}
                         </div>
                       </td>
@@ -867,8 +856,6 @@ export default function AdminBookingsPage() {
             备注：结算逻辑会读取「店铺设置」里的平台费率/理发师提成（basis = bps/10000），账本可在「结算账本」查看。
           </div>
         </div>
-
-        {/* 你原来那个 updateBookingStatus 仍可用：如果你想做“强制改状态”入口，后面我再加一块隐藏的管理员操作区 */}
       </main>
     </div>
   )

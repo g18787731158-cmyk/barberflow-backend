@@ -29,16 +29,14 @@ function parsePosInt(v: unknown): number | null {
 
 /**
  * 规则：
- * - 取消 = status: CANCELLED（如你项目用 CANCELED 也兼容）
+ * - 取消 = status: CANCELED
  * - 释放时段 = slotLock: NULL（不是 false）
  * - 幂等：重复取消直接返回 ok
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await readJson(req)
-
-    // ✅ 兼容：id / bookingId
-    const id = parsePosInt(body.id ?? body.bookingId)
+    const id = parsePosInt(body.id ?? body.bookingId) // ✅ 关键：兼容 bookingId
 
     if (!id) {
       return NextResponse.json({ ok: false, error: 'Missing or invalid id' }, { status: 400 })
@@ -52,10 +50,7 @@ export async function POST(req: NextRequest) {
 
       if (!b) return { kind: 'notfound' as const }
 
-      const isCanceled = b.status === 'CANCELLED' || b.status === 'CANCELED'
-
-      // ✅ 幂等：已取消就直接返回，同时确保 slotLock 已经释放（NULL）
-      if (isCanceled) {
+      if (String(b.status).toUpperCase() === 'CANCELED' || String(b.status).toUpperCase() === 'CANCELLED') {
         if (b.slotLock !== null) {
           await tx.booking.update({
             where: { id },
@@ -63,20 +58,20 @@ export async function POST(req: NextRequest) {
             select: { id: true },
           })
         }
-        return { kind: 'ok' as const, id, status: b.status, slotLock: null as null }
+        return { kind: 'ok' as const, id, status: 'CANCELED', slotLock: false }
       }
 
       const updated = await tx.booking.update({
         where: { id },
         data: {
-          status: 'CANCELLED',
-          slotLock: null, // ✅ 关键：释放锁用 NULL
+          status: 'CANCELED',
+          slotLock: null,
           completedAt: null,
         },
         select: { id: true, status: true, slotLock: true },
       })
 
-      return { kind: 'ok' as const, id: updated.id, status: updated.status, slotLock: updated.slotLock }
+      return { kind: 'ok' as const, id: updated.id, status: updated.status, slotLock: false }
     })
 
     if (result.kind === 'notfound') {

@@ -1,63 +1,104 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+export const runtime = 'nodejs'
+
+type JsonObj = Record<string, unknown>
+
+function isJsonObj(v: unknown): v is JsonObj {
+  return typeof v === 'object' && v !== null
+}
+
+async function readJson(req: NextRequest): Promise<JsonObj> {
+  try {
+    const v = await req.json()
+    return isJsonObj(v) ? v : {}
+  } catch {
+    return {}
+  }
+}
+
+function parsePosInt(v: unknown): number | null {
+  if (typeof v === 'number' && Number.isInteger(v) && v > 0) return v
+  if (typeof v === 'string' && v.trim()) {
+    const n = Number(v)
+    if (Number.isInteger(n) && n > 0) return n
+  }
+  return null
+}
+
+/**
+ * 规则：
+ * - 完成 = status: COMPLETED
+ * - 释放时段 = slotLock: NULL（不是 false）
+ * - 幂等：重复完成直接返回 ok，并确保 slotLock 已释放
+ */
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json().catch(() => ({}))
-    const id = Number(body?.id)
+    const body = await readJson(req)
+    const id = parsePosInt(body.id ?? body.bookingId)
 
-    if (!id || Number.isNaN(id)) {
-      return NextResponse.json({ error: 'Missing or invalid id' }, { status: 400 })
+    if (!id) {
+      return NextResponse.json({ ok: false, error: 'Missing or invalid id' }, { status: 400 })
     }
 
-    const booking = await prisma.booking.findUnique({
-      where: { id },
-      select: { id: true, status: true, slotLock: true, completedAt: true },
-    })
-
-    if (!booking) {
-      return NextResponse.json({ error: 'Booking not found' }, { status: 404 })
-    }
-
-    // ✅ 幂等：已完成则补齐 completedAt/slotLock 后返回 ok
-    if (booking.status === 'COMPLETED') {
-      const needFix = booking.slotLock || !booking.completedAt
-      if (needFix) {
-        const fixed = await prisma.booking.update({
-          where: { id },
-          data: {
-            slotLock: false,
-            completedAt: booking.completedAt ?? new Date(),
-          },
-          select: { id: true, status: true, slotLock: true, completedAt: true },
-        })
-        return NextResponse.json({ ok: true, ...fixed, alreadyCompleted: true })
-      }
-      return NextResponse.json({
-        ok: true,
-        id,
-        status: 'COMPLETED',
-        slotLock: false,
-        completedAt: booking.completedAt,
-        alreadyCompleted: true,
+    const result = await prisma.$transaction(async (tx) => {
+      const b = await tx.booking.findUnique({
+        where: { id },
+        select: { id: true, status: true, slotLock: true, completedAt: true },
       })
-    }
 
-    const updated = await prisma.booking.update({
-      where: { id },
-      data: {
-        status: 'COMPLETED',
+      if (!b) return { kind: 'notfound' as const }
+
+      // 已完成：幂等 + 确保 slotLock=null
+      if (String(b.status).toUpperCase() === 'COMPLETED') {
+        if (b.slotLock !== null) {
+          await tx.booking.update({
+            where: { id },
+            data: { slotLock: null },
+            select: { id: true },
+          })
+        }
+        return {
+          kind: 'ok' as const,
+          id,
+          status: 'COMPLETED',
+          slotLock: false,
+          completedAt: b.completedAt?.toISOString() ?? null,
+          alreadyCompleted: true,
+        }
+      }
+
+      const now = new Date()
+      const updated = await tx.booking.update({
+        where: { id },
+        data: {
+          status: 'COMPLETED',
+          completedAt: now,
+          slotLock: null,
+        },
+        select: { id: true, status: true, completedAt: true },
+      })
+
+      return {
+        kind: 'ok' as const,
+        id: updated.id,
+        status: updated.status,
         slotLock: false,
-        completedAt: booking.completedAt ?? new Date(),
-      },
-      select: { id: true, status: true, slotLock: true, completedAt: true },
+        completedAt: updated.completedAt?.toISOString() ?? null,
+        alreadyCompleted: false,
+      }
     })
 
-    return NextResponse.json({ ok: true, ...updated })
+    if (result.kind === 'notfound') {
+      return NextResponse.json({ ok: false, error: 'Booking not found' }, { status: 404 })
+    }
+
+    return NextResponse.json({ ok: true, ...result })
   } catch (err: any) {
     console.error('[bookings/complete] error:', err)
     return NextResponse.json(
-      { error: 'Internal Server Error', detail: err?.message },
+      { ok: false, error: 'Internal Server Error', detail: err?.message },
       { status: 500 },
     )
   }

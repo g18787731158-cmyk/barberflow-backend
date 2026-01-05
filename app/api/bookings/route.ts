@@ -23,6 +23,7 @@ function dateToYMD_CN(d: Date) {
   return `${x.getUTCFullYear()}-${pad2(x.getUTCMonth() + 1)}-${pad2(x.getUTCDate())}`
 }
 
+// ✅ 统一按中国日切范围
 function cnDayRange(dateStr: string) {
   const start = new Date(`${dateStr}T00:00:00+08:00`)
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
@@ -114,15 +115,29 @@ export async function POST(req: NextRequest) {
     const body = await req.json().catch(() => ({} as any))
     const { shopId, barberId, serviceId, userName, phone, startTime, source } = body || {}
 
+    // ✅ 护栏 1：startTime 必须是 string（否则你会看到“后端收到 1”但不知道谁传的）
+    if (typeof startTime !== 'string') {
+      return NextResponse.json(
+        {
+          success: false,
+          message: 'startTime 必须是字符串（YYYY-MM-DDTHH:mm:ss 或带 +08:00）',
+          gotType: typeof startTime,
+          got: startTime,
+        },
+        { status: 400 },
+      )
+    }
+
     // ✅ phone 改为可选：不再强制必填
     if (!shopId || !barberId || !serviceId || !userName || !startTime) {
       return NextResponse.json({ success: false, message: '缺少必要字段' }, { status: 400 })
     }
 
-    const start = parseStartTimeCN(String(startTime))
+    const start = parseStartTimeCN(startTime)
     if (Number.isNaN(start.getTime())) {
+      // ✅ 护栏 2：把收到的 startTime 原样回给你，方便定位前端哪里变形了
       return NextResponse.json(
-        { success: false, message: `startTime 格式不正确: ${startTime}` },
+        { success: false, message: 'startTime 格式不正确', got: startTime },
         { status: 400 },
       )
     }
@@ -132,7 +147,10 @@ export async function POST(req: NextRequest) {
     const shopIdNum = Number(shopId)
 
     if ([barberIdNum, serviceIdNum, shopIdNum].some((n) => Number.isNaN(n) || n <= 0)) {
-      return NextResponse.json({ success: false, message: 'shopId/barberId/serviceId 非法' }, { status: 400 })
+      return NextResponse.json(
+        { success: false, message: 'shopId/barberId/serviceId 非法' },
+        { status: 400 },
+      )
     }
 
     // ✅ 锁按中国日期切
@@ -157,6 +175,7 @@ export async function POST(req: NextRequest) {
             barberId: barberIdNum,
             startTime: { gte: dayStart, lt: dayEnd },
             slotLock: true,
+            // ✅ 同时兼容两种拼法（你项目里两个都出现过）
             status: { notIn: ['CANCELLED', 'CANCELED'] as any },
           },
           include: { service: { select: { durationMinutes: true } } },
