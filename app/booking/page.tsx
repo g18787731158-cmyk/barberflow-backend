@@ -265,7 +265,7 @@ export default function BookingPage() {
     }
 
     // 组合成完整时间：YYYY-MM-DDTHH:MM
-    const startTime = `${selectedDate}T${selectedTimeSlot}:00`
+    const startTime = `${selectedDate}T${selectedTimeSlot}:00+08:00`
 
     setSubmitting(true)
     try {

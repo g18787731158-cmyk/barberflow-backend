@@ -1,94 +1,111 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
+export const runtime = 'nodejs'
+
 type Range = 'day' | 'week' | 'month'
 
-function parseDate(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  if (!y || !m || !d) return null
-  return new Date(y, m - 1, d, 0, 0, 0, 0)
+const CN_OFFSET_MS = 8 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0')
 }
 
-function getRangeStartEnd(base: Date, range: Range) {
-  const dayBase = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 0, 0, 0, 0)
+function cnMidnightMs(dateStr: string) {
+  // ✅ 中国当天 00:00
+  const d = new Date(`${dateStr}T00:00:00+08:00`)
+  const ms = d.getTime()
+  return Number.isNaN(ms) ? null : ms
+}
+
+function cnGetYMDFromMs(ms: number) {
+  const x = new Date(ms + CN_OFFSET_MS)
+  return {
+    y: x.getUTCFullYear(),
+    m: x.getUTCMonth() + 1,
+    d: x.getUTCDate(),
+  }
+}
+
+function cnDayOfWeekFromMs(ms: number) {
+  // 0(日)~6(六) —— 中国语义
+  const x = new Date(ms + CN_OFFSET_MS)
+  return x.getUTCDay()
+}
+
+function rangeStartEndCN(dateStr: string, range: Range) {
+  const baseMs = cnMidnightMs(dateStr)
+  if (baseMs === null) return null
+
+  if (range === 'day') {
+    return { start: new Date(baseMs), end: new Date(baseMs + DAY_MS) }
+  }
 
   if (range === 'week') {
-    const weekStart = new Date(dayBase)
-    const day = weekStart.getDay() // 0 Sunday
-    const diffToMonday = day === 0 ? -6 : 1 - day
-    weekStart.setDate(weekStart.getDate() + diffToMonday)
-    weekStart.setHours(0, 0, 0, 0)
-
-    const weekEnd = new Date(weekStart)
-    weekEnd.setDate(weekStart.getDate() + 7)
-    return { start: weekStart, end: weekEnd }
+    // 周一为起点
+    const dow = cnDayOfWeekFromMs(baseMs) // 0=周日
+    const diffToMon = dow === 0 ? -6 : 1 - dow
+    const weekStartMs = baseMs + diffToMon * DAY_MS
+    const weekEndMs = weekStartMs + 7 * DAY_MS
+    return { start: new Date(weekStartMs), end: new Date(weekEndMs) }
   }
 
-  if (range === 'month') {
-    const monthStart = new Date(dayBase.getFullYear(), dayBase.getMonth(), 1, 0, 0, 0, 0)
-    const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 1, 0, 0, 0, 0)
-    return { start: monthStart, end: monthEnd }
-  }
-
-  const start = dayBase
-  const end = new Date(dayBase.getFullYear(), dayBase.getMonth(), dayBase.getDate() + 1, 0, 0, 0, 0)
-  return { start, end }
+  // month
+  const { y, m } = cnGetYMDFromMs(baseMs)
+  const monthStart = new Date(`${y}-${pad2(m)}-01T00:00:00+08:00`).getTime()
+  const nextM = m === 12 ? 1 : m + 1
+  const nextY = m === 12 ? y + 1 : y
+  const monthEnd = new Date(`${nextY}-${pad2(nextM)}-01T00:00:00+08:00`).getTime()
+  return { start: new Date(monthStart), end: new Date(monthEnd) }
 }
 
 export async function GET(req: NextRequest) {
-  const { searchParams } = new URL(req.url)
-  const dateStr = searchParams.get('date')
-  const barberIdStr = searchParams.get('barberId')
-  const rangeParam = searchParams.get('range') as Range | null
-
-  const range: Range = rangeParam === 'week' || rangeParam === 'month' ? rangeParam : 'day'
-
-  if (!dateStr) {
-    return NextResponse.json({ error: '缺少日期参数 date（格式 YYYY-MM-DD）' }, { status: 400 })
-  }
-
-  const base = parseDate(dateStr)
-  if (!base) {
-    return NextResponse.json({ error: '日期格式不正确，需为 YYYY-MM-DD' }, { status: 400 })
-  }
-
-  const { start, end } = getRangeStartEnd(base, range)
-
-  const where: any = {
-    startTime: { gte: start, lt: end },
-  }
-
-  if (barberIdStr) {
-    const barberId = Number(barberIdStr)
-    if (!Number.isNaN(barberId)) where.barberId = barberId
-  }
-
   try {
+    const { searchParams } = new URL(req.url)
+    const dateStr = searchParams.get('date')
+    const barberIdStr = searchParams.get('barberId')
+    const rangeParam = (searchParams.get('range') as Range | null) ?? 'day'
+
+    const range: Range = rangeParam === 'week' || rangeParam === 'month' ? rangeParam : 'day'
+
+    if (!dateStr) {
+      return NextResponse.json(
+        { error: '缺少 date（YYYY-MM-DD）' },
+        { status: 400 },
+      )
+    }
+
+    const r = rangeStartEndCN(dateStr, range)
+    if (!r) {
+      return NextResponse.json({ error: 'date 格式不正确（YYYY-MM-DD）' }, { status: 400 })
+    }
+
+    const where: any = {
+      startTime: { gte: r.start, lt: r.end },
+    }
+
+    if (barberIdStr) {
+      const barberId = Number(barberIdStr)
+      if (!Number.isNaN(barberId) && barberId > 0) where.barberId = barberId
+    }
+
     const bookings = await prisma.booking.findMany({
       where,
       orderBy: { startTime: 'asc' },
-      include: { shop: true, barber: true, service: true },
+      include: {
+        shop: true,
+        barber: true,
+        service: true,
+      },
     })
 
-    // ✅ 批量查账本：有没有 SETTLE
-    const ids = bookings.map((b) => b.id)
-    const ledgers = ids.length
-      ? await prisma.ledger.findMany({
-          where: { bookingId: { in: ids }, type: 'SETTLE' },
-          select: { bookingId: true, id: true },
-        })
-      : []
-
-    const settledSet = new Set(ledgers.map((x) => x.bookingId))
-
-    const patched = bookings.map((b) => ({
-      ...b,
-      settled: settledSet.has(b.id),
-    }))
-
-    return NextResponse.json({ bookings: patched })
-  } catch (err) {
-    console.error('获取后台预约失败:', err)
-    return NextResponse.json({ error: '服务器错误，获取预约失败' }, { status: 500 })
+    return NextResponse.json({ bookings })
+  } catch (err: any) {
+    console.error('[admin/bookings] error:', err)
+    return NextResponse.json(
+      { error: '服务器错误，获取预约失败', detail: err?.message },
+      { status: 500 },
+    )
   }
 }

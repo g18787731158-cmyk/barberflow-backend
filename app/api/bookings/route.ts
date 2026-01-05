@@ -1,17 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
-import { STATUS } from '@/lib/status'
 import type { Prisma } from '@prisma/client'
-
-type Tx = Prisma.TransactionClient
 
 export const runtime = 'nodejs'
 
-const SLOT_MINUTES = 30
-const CN_OFFSET_MS = 8 * 60 * 60 * 1000
+type Tx = Prisma.TransactionClient
 
-// ✅ 线上规则：需提前预约 X 分钟（门店 admin 可绕过）
-const MIN_ADVANCE_MINUTES = 60
+const CN_OFFSET_MS = 8 * 60 * 60 * 1000
+const SLOT_MINUTES = 30
 
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
@@ -21,48 +17,34 @@ function pad2(n: number) {
   return String(n).padStart(2, '0')
 }
 
-// ✅ 把 Date 转成中国本地 YYYY-MM-DD（不依赖服务器时区）
-function toCN_YMD(d: Date) {
-  const ms = d.getTime() + CN_OFFSET_MS
-  const x = new Date(ms)
+// ✅ 把任意 Date 按中国时区取 YYYY-MM-DD（不依赖服务器时区）
+function dateToYMD_CN(d: Date) {
+  const x = new Date(d.getTime() + CN_OFFSET_MS)
   return `${x.getUTCFullYear()}-${pad2(x.getUTCMonth() + 1)}-${pad2(x.getUTCDate())}`
 }
 
-// ✅ 强制按中国时区切天（+08:00）
 function cnDayRange(dateStr: string) {
   const start = new Date(`${dateStr}T00:00:00+08:00`)
   const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
   return { start, end }
 }
 
-// ✅ 解析 startTime：
-// - 如果带 Z 或 +08:00 之类时区：直接 new Date
-// - 如果不带时区：默认按中国时区 +08:00 解析（避免服务器是 UTC 时翻车）
-function parseStartTimeCN(input: any): Date | null {
-  if (input == null) return null
-  let s = String(input).trim()
-  if (!s) return null
+// ✅ 兜底：没带时区就当中国时间 +08:00
+function parseStartTimeCN(input: string) {
+  const s = String(input ?? '').trim()
+  if (!s) return new Date('invalid')
 
-  // 兼容 "YYYY-MM-DD HH:mm:ss"
-  s = s.replace(' ', 'T')
+  // 已带 Z 或 ±HH:mm 的，直接解析
+  if (/[zZ]$|[+\-]\d{2}:\d{2}$/.test(s)) return new Date(s)
 
-  // 补秒：YYYY-MM-DDTHH:mm -> + ":00"
-  if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) s += ':00'
+  // 允许 "YYYY-MM-DDTHH:mm" / "YYYY-MM-DDTHH:mm:ss" / "YYYY-MM-DD HH:mm:ss"
+  const isoLike = s.includes('T') ? s : s.replace(' ', 'T')
+  const withSeconds =
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(isoLike) ? `${isoLike}:00` : isoLike
 
-  const hasTz = /Z$|[+-]\d{2}:\d{2}$/.test(s)
-  const iso = hasTz ? s : `${s}+08:00`
-
-  const d = new Date(iso)
-  if (Number.isNaN(d.getTime())) return null
-  return d
+  return new Date(`${withSeconds}+08:00`)
 }
 
-function onlyDigits11(phone: string) {
-  const digits = phone.replace(/\s+/g, '')
-  return /^\d{11}$/.test(digits)
-}
-
-// ✅ tx 类型必须是 TransactionClient
 async function calcFinalPrice(tx: Tx, barberId: number, serviceId: number) {
   const bs = await tx.barberservice.findUnique({
     where: { barberId_serviceId: { barberId, serviceId } },
@@ -87,25 +69,6 @@ async function getServiceDuration(tx: Tx, serviceId: number) {
   return svc.durationMinutes ?? SLOT_MINUTES
 }
 
-// ✅ 可选：校验理发师营业时间（你 barber 表里有 workStartHour/workEndHour）
-async function getBarberWorkHours(tx: Tx, barberId: number) {
-  const b = await tx.barber.findUnique({
-    where: { id: barberId },
-    select: { workStartHour: true, workEndHour: true },
-  })
-  // 兜底
-  return {
-    startHour: b?.workStartHour ?? 10,
-    endHour: b?.workEndHour ?? 21,
-  }
-}
-
-function cnMinutesOfDay(d: Date) {
-  const ms = d.getTime() + CN_OFFSET_MS
-  const x = new Date(ms)
-  return x.getUTCHours() * 60 + x.getUTCMinutes()
-}
-
 // GET /api/bookings?date=YYYY-MM-DD&shopId=1&barberId=1&phone=...
 export async function GET(req: NextRequest) {
   try {
@@ -123,7 +86,7 @@ export async function GET(req: NextRequest) {
     }
     if (shopId) where.shopId = Number(shopId)
     if (barberId) where.barberId = Number(barberId)
-    if (phone) where.phone = phone
+    if (phone) where.phone = String(phone)
 
     const bookings = await prisma.booking.findMany({
       where,
@@ -137,41 +100,29 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({ success: true, bookings }, { status: 200 })
   } catch (error) {
-    console.error('GET /api/bookings error', error)
+    console.error('[GET /api/bookings] error', error)
     return NextResponse.json(
-      { success: false, error: 'GET 服务器错误', message: 'GET 服务器错误' },
+      { success: false, message: 'GET 服务器错误', error: String(error) },
       { status: 500 },
     )
   }
 }
 
-// POST /api/bookings
+// POST /api/bookings  创建预约（网页/小程序/门店）
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json()
+    const body = await req.json().catch(() => ({} as any))
     const { shopId, barberId, serviceId, userName, phone, startTime, source } = body || {}
 
-    // ✅ phone 改为可选
+    // ✅ phone 改为可选：不再强制必填
     if (!shopId || !barberId || !serviceId || !userName || !startTime) {
-      return NextResponse.json(
-        { success: false, error: '缺少必要字段', message: '缺少必要字段' },
-        { status: 400 },
-      )
+      return NextResponse.json({ success: false, message: '缺少必要字段' }, { status: 400 })
     }
 
-    const start = parseStartTimeCN(startTime)
-    if (!start) {
+    const start = parseStartTimeCN(String(startTime))
+    if (Number.isNaN(start.getTime())) {
       return NextResponse.json(
-        { success: false, error: `startTime 格式不正确: ${startTime}`, message: 'startTime 格式不正确' },
-        { status: 400 },
-      )
-    }
-
-    // ✅ 30分钟对齐校验（防止绕过前端乱传）
-    const slotMs = SLOT_MINUTES * 60 * 1000
-    if (start.getTime() % slotMs !== 0) {
-      return NextResponse.json(
-        { success: false, error: 'startTime 必须为 30 分钟整点（:00 或 :30）', message: 'startTime 必须为 30 分钟整点' },
+        { success: false, message: `startTime 格式不正确: ${startTime}` },
         { status: 400 },
       )
     }
@@ -180,37 +131,13 @@ export async function POST(req: NextRequest) {
     const serviceIdNum = Number(serviceId)
     const shopIdNum = Number(shopId)
 
-    if (Number.isNaN(barberIdNum) || Number.isNaN(serviceIdNum) || Number.isNaN(shopIdNum)) {
-      return NextResponse.json(
-        { success: false, error: 'shopId/barberId/serviceId 必须为数字', message: 'id 参数不合法' },
-        { status: 400 },
-      )
+    if ([barberIdNum, serviceIdNum, shopIdNum].some((n) => Number.isNaN(n) || n <= 0)) {
+      return NextResponse.json({ success: false, message: 'shopId/barberId/serviceId 非法' }, { status: 400 })
     }
 
-    const phoneStr = phone == null ? null : String(phone).trim()
-    if (phoneStr && !onlyDigits11(phoneStr)) {
-      return NextResponse.json(
-        { success: false, error: '手机号格式不对（需 11 位数字）', message: '手机号格式不对' },
-        { status: 400 },
-      )
-    }
-
-    const sourceStr = (source ? String(source) : '').toLowerCase() || 'miniapp' // 保持你原兼容
-    const isAdmin = sourceStr === 'admin'
-
-    // ✅ 提前预约限制（门店 admin 绕过）
-    if (!isAdmin) {
-      const diffMin = (start.getTime() - Date.now()) / 60000
-      if (diffMin < MIN_ADVANCE_MINUTES) {
-        return NextResponse.json(
-          { success: false, error: `需至少提前 ${MIN_ADVANCE_MINUTES} 分钟预约`, message: '预约过于临近' },
-          { status: 400 },
-        )
-      }
-    }
-
-    const dateStr = toCN_YMD(start)
-    const lockKey = `bf:barber:${barberIdNum}:${dateStr}`
+    // ✅ 锁按中国日期切
+    const dateStrCN = dateToYMD_CN(start)
+    const lockKey = `bf:barber:${barberIdNum}:${dateStrCN}`
 
     const result = await prisma.$transaction(async (tx) => {
       const gotRows = await tx.$queryRaw<Array<{ got: any }>>`
@@ -220,31 +147,22 @@ export async function POST(req: NextRequest) {
       if (got !== 1) return { kind: 'busy' as const }
 
       try {
-        const { start: dayStart, end: dayEnd } = cnDayRange(dateStr)
+        const { start: dayStart, end: dayEnd } = cnDayRange(dateStrCN)
 
         const duration = await getServiceDuration(tx, serviceIdNum)
         const newEnd = addMinutes(start, duration)
 
-        // ✅ 校验营业时间（按 barber.workStartHour/workEndHour）
-        const { startHour, endHour } = await getBarberWorkHours(tx, barberIdNum)
-        const startMin = cnMinutesOfDay(start)
-        const endMin = startMin + duration
-        if (startMin < startHour * 60 || endMin > endHour * 60) {
-          return { kind: 'out_of_hours' as const, startHour, endHour }
-        }
-
-        // ✅ 查当天占用单：以 slotLock=true 为准
         const exist = await tx.booking.findMany({
           where: {
             barberId: barberIdNum,
             startTime: { gte: dayStart, lt: dayEnd },
             slotLock: true,
+            status: { notIn: ['CANCELLED', 'CANCELED'] as any },
           },
           include: { service: { select: { durationMinutes: true } } },
           orderBy: { startTime: 'asc' },
         })
 
-        // ✅ 重叠检测：start < bEnd && newEnd > b.startTime
         const conflict = exist.some((b) => {
           const dur = b.service?.durationMinutes ?? SLOT_MINUTES
           const bEnd = addMinutes(b.startTime, dur)
@@ -260,10 +178,10 @@ export async function POST(req: NextRequest) {
             barberId: barberIdNum,
             serviceId: serviceIdNum,
             userName: String(userName),
-            phone: phoneStr || null,
+            phone: phone ? String(phone) : null,
             startTime: start,
-            source: sourceStr,
-            status: STATUS.SCHEDULED,
+            source: source || 'web',
+            status: 'SCHEDULED',
             slotLock: true,
             price: finalPrice,
           },
@@ -277,35 +195,23 @@ export async function POST(req: NextRequest) {
         try {
           await tx.$queryRaw`SELECT RELEASE_LOCK(${lockKey}) AS released`
         } catch (e) {
-          console.error('RELEASE_LOCK failed:', e)
+          console.error('[bookings] RELEASE_LOCK failed:', e)
         }
       }
     })
 
     if (result.kind === 'busy') {
-      return NextResponse.json(
-        { success: false, error: '系统繁忙，请稍后再试', message: '系统繁忙' },
-        { status: 503 },
-      )
-    }
-    if (result.kind === 'out_of_hours') {
-      return NextResponse.json(
-        { success: false, error: `不在营业时间内（${result.startHour}:00 ~ ${result.endHour}:00）`, message: '不在营业时间内' },
-        { status: 400 },
-      )
+      return NextResponse.json({ success: false, message: '系统繁忙，请稍后再试' }, { status: 503 })
     }
     if (result.kind === 'conflict') {
-      return NextResponse.json(
-        { success: false, error: '该时间段已被预约，请换一个时间', message: '该时间段已被预约' },
-        { status: 409 },
-      )
+      return NextResponse.json({ success: false, message: '该时间段已被预约，请换一个时间' }, { status: 409 })
     }
 
     return NextResponse.json({ success: true, booking: result.booking }, { status: 201 })
   } catch (error: any) {
-    console.error('POST /api/bookings error', error)
+    console.error('[POST /api/bookings] error', error)
     return NextResponse.json(
-      { success: false, error: '服务器开小差了，请稍后再试', message: '服务器错误' },
+      { success: false, message: '服务器开小差了，请稍后再试', error: String(error) },
       { status: 500 },
     )
   }
