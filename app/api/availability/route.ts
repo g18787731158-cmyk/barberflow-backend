@@ -2,21 +2,22 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 
 const SLOT_MINUTES = 30
-
-function cnDayRange(dateStr: string) {
-  // ✅ 强制按中国时区切天（+08:00），别用服务器时区
-  const start = new Date(`${dateStr}T00:00:00+08:00`)
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
-  return { start, end }
-}
+const CN_OFFSET_MS = 8 * 60 * 60 * 1000
 
 function pad2(n: number) {
   return String(n).padStart(2, '0')
 }
 
+// ✅ 强制按中国时区切天（+08:00）
+function cnDayRange(dateStr: string) {
+  const start = new Date(`${dateStr}T00:00:00+08:00`)
+  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
+  return { start, end }
+}
+
 // ✅ 把 Date 转成中国本地 HH:mm（不依赖服务器时区）
 function toCN_HHMM(d: Date) {
-  const ms = d.getTime() + 8 * 60 * 60 * 1000
+  const ms = d.getTime() + CN_OFFSET_MS
   const x = new Date(ms)
   return `${pad2(x.getUTCHours())}:${pad2(x.getUTCMinutes())}`
 }
@@ -37,9 +38,9 @@ export async function GET(req: NextRequest) {
     const bookings = await prisma.booking.findMany({
       where: {
         barberId,
-        startTime: { gte: dayStart, lt: dayEnd }, // ✅ 用 lt next day，别用 23:59:59
-        // ✅ 建议过滤取消单（按你库里的状态枚举改）
-        status: { notIn: ['CANCELLED', 'CANCELED'] as any },
+        startTime: { gte: dayStart, lt: dayEnd },
+        // ✅ 以 slotLock 为准：取消后把 slotLock 置 NULL，就不会占用
+        slotLock: true,
       },
       include: {
         service: { select: { durationMinutes: true } },

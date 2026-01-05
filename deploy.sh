@@ -7,20 +7,37 @@ BRANCH="main"
 PORT="3000"
 
 cd "$APP_DIR"
-
 echo "==> cd $APP_DIR"
 
-# ---------- backup .next ----------
-BACKUP_DIR="/home/ecs-user/.deploy_backups/$APP_NAME/$(date +%Y%m%d-%H%M%S)-$(git rev-parse HEAD)"
+# ---------- fix: remove stray lockfiles that confuse Next workspace root ----------
+# Next/Turbopack may infer workspace root by scanning parent dirs for lockfiles.
+# If there's a lockfile in /home/ecs-user, it can cause weird root selection.
+STRAY_LOCKS=(
+  "/home/ecs-user/package-lock.json"
+  "/home/ecs-user/pnpm-lock.yaml"
+  "/home/ecs-user/yarn.lock"
+)
+for f in "${STRAY_LOCKS[@]}"; do
+  if [ -f "$f" ]; then
+    echo "⚠️ removing stray lockfile: $f"
+    rm -f "$f"
+  fi
+done
+
+# ---------- backup .next (ONLY if valid) ----------
+OLD_REV="$(git rev-parse HEAD)"
+BACKUP_DIR="/home/ecs-user/.deploy_backups/$APP_NAME/$(date +%Y%m%d-%H%M%S)-$OLD_REV"
+BACKUP_OK=0
+
 mkdir -p "$BACKUP_DIR"
-if [ -d ".next" ]; then
+if [ -f ".next/BUILD_ID" ]; then
   cp -a .next "$BACKUP_DIR/.next"
+  BACKUP_OK=1
   echo "✅ backup .next done -> $BACKUP_DIR"
 else
-  echo "ℹ️ no .next to backup"
+  echo "ℹ️ skip backup .next (BUILD_ID missing)"
 fi
 
-OLD_REV="$(git rev-parse HEAD)"
 echo "==> old rev: $OLD_REV"
 
 echo "==> fetch origin/$BRANCH"
@@ -59,14 +76,23 @@ git clean -fd -e "scripts/" -e ".env*" >/dev/null || true
 
 rollback() {
   echo
-  echo "❌ deploy failed — rolling back .next ..."
-  if [ -d "$BACKUP_DIR/.next" ]; then
+  echo "❌ deploy failed — rollback ..."
+
+  # If we have a VALID .next backup, restore it; otherwise stop to prevent CPU restart loop
+  if [ "$BACKUP_OK" -eq 1 ] && [ -d "$BACKUP_DIR/.next" ]; then
     rm -rf .next
     cp -a "$BACKUP_DIR/.next" .next
     echo "✅ restored .next from backup"
+  else
+    echo "⚠️ no valid .next backup; stopping pm2 to avoid restart loop"
+    pm2 stop "$APP_NAME" >/dev/null 2>&1 || true
+    pm2 ls || true
+    echo "==> rollback done (pm2 stopped). Check logs:"
+    echo "    pm2 logs $APP_NAME --err --lines 200"
+    return 0
   fi
 
-  # PM2 兜底：不存在就 start，存在就 reload
+  # PM2 fallback: reload if exists, else start
   if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
     pm2 reload "$APP_NAME" || true
   else
@@ -105,29 +131,46 @@ else
 fi
 
 # ---------- build ----------
+# Hard reset might leave partial .next from previous runs in weird cases; ensure clean build output
+echo "==> clean .next (prevent partial build artifacts)"
+rm -rf .next
+
 echo "==> next build"
-npm run build
+nice -n 10 npm run build
+
+# ---------- ensure BUILD_ID exists ----------
+if [ ! -s ".next/BUILD_ID" ]; then
+  echo "❌ BUILD_ID missing after build — abort"
+  exit 1
+fi
+echo "✅ BUILD_ID: $(cat .next/BUILD_ID)"
 
 # ---------- pm2 reload/start ----------
 echo "==> pm2 reload/start $APP_NAME"
 if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
-  pm2 reload "$APP_NAME"
+  pm2 reload "$APP_NAME" --update-env
 else
   pm2 start npm --name "$APP_NAME" -- start
 fi
 pm2 save
 
-# ---------- warmup ----------
+# ---------- warmup (must succeed) ----------
 echo "==> wait app warmup"
-for i in {1..20}; do
+ok=0
+for i in {1..30}; do
   if curl -fsS "http://127.0.0.1:$PORT/api/health" >/dev/null 2>&1; then
+    ok=1
     echo "✅ local api/health ok"
     break
   fi
   sleep 0.5
 done
+if [ "$ok" -ne 1 ]; then
+  echo "❌ warmup timeout — abort"
+  exit 1
+fi
 
-# ---------- nginx reload (optional, keep as you had) ----------
+# ---------- nginx reload (optional) ----------
 echo "==> nginx test/reload"
 sudo nginx -t
 sudo systemctl reload nginx
