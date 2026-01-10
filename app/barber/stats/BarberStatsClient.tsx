@@ -108,7 +108,7 @@ export default function BarberStatsClient() {
         const statusText =
           st === STATUS.COMPLETED
             ? '已完成'
-            : st === STATUS.CANCELLED
+            : st === STATUS.CANCELED
               ? '已取消'
               : st === STATUS.CONFIRMED
                 ? '已确认'

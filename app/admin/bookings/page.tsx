@@ -17,6 +17,7 @@ type Booking = {
   status: string
   price?: number | null
   source?: string | null
+  splitStatus?: string | null // ✅ 关键：结算状态
   shop?: { name: string } | null
   barber?: { name: string } | null
   service?: { name: string; price: number | null } | null
@@ -47,7 +48,7 @@ function formatMoney(amount: number) {
 function statusLabel(raw: string) {
   const st = canonStatus(raw)
   if (st === STATUS.COMPLETED) return '已完成'
-  if (st === STATUS.CANCELLED) return '已取消'
+  if (st === STATUS.CANCELED) return '已取消'
   if (st === STATUS.CONFIRMED) return '已确认'
   if (st === STATUS.SCHEDULED) return '已预约'
   return String(raw || '')
@@ -141,7 +142,7 @@ export default function AdminBookingsPage() {
         } else if (statusFilter === 'completed') {
           if (st !== STATUS.COMPLETED) return false
         } else if (statusFilter === 'cancelled') {
-          if (st !== STATUS.CANCELLED) return false
+          if (st !== STATUS.CANCELED) return false
         }
       }
 
@@ -271,33 +272,6 @@ export default function AdminBookingsPage() {
     }
   }
 
-  async function updateBookingStatus(id: number, status: string) {
-    try {
-      setLoading(true)
-      setMessage('')
-
-      const res = await fetch('/api/admin/bookings/update-status', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id, status }),
-      })
-      const data = await safeJson(res)
-
-      if (!res.ok) {
-        console.error('update-status error:', data)
-        setMessage(pickErr(data) || '更新预约状态失败')
-        return
-      }
-
-      await fetchBookings(date, selectedBarberId, range)
-    } catch (err: any) {
-      console.error('update-status error:', err)
-      setMessage(err?.message || '更新预约状态失败')
-    } finally {
-      setLoading(false)
-    }
-  }
-
   async function createBookingFromAdmin() {
     try {
       const { barberId, time, userName, phone } = newBooking
@@ -358,15 +332,17 @@ export default function AdminBookingsPage() {
     }
 
     try {
-      const header = ['日期', '时间', '门店', '理发师', '项目', '顾客', '手机号', '状态', '来源']
+      const header = ['日期', '时间', '门店', '理发师', '项目', '顾客', '手机号', '状态', '来源', '是否已结算']
 
       const rows = filteredBookings.map((bk) => {
         const d = new Date(bk.startTime)
-        const dateStr = d.toISOString().slice(0, 10)
+        const dateStr = formatDate(d)
         const timeStr = formatTime(bk.startTime)
 
         const statusText = statusLabel(bk.status)
         const sourceText = sourceLabel(bk.source)
+
+        const isSettled = String(bk.splitStatus || '').toLowerCase() === 'settled'
 
         return [
           dateStr,
@@ -378,6 +354,7 @@ export default function AdminBookingsPage() {
           bk.phone || '',
           statusText,
           sourceText,
+          isSettled ? 'YES' : 'NO',
         ]
       })
 
@@ -424,7 +401,7 @@ export default function AdminBookingsPage() {
     }
   }
 
-  // ✅ 业务 API：关键修复点在这里 —— 统一传 { id }，并兼容 bookingId
+  // ✅ 业务 API：统一传 { id }（兼容旧的 bookingId 一起带上也无所谓）
   async function apiComplete(bookingId: number) {
     const res = await fetch('/api/bookings/complete', {
       method: 'POST',
@@ -492,11 +469,7 @@ export default function AdminBookingsPage() {
       setMessage('')
       const data: any = await apiSettle(bookingId)
       await fetchBookings(date, selectedBarberId, range)
-      if (data?.settled) {
-        setMessage(`✅ #${bookingId} 已结算`)
-      } else {
-        setMessage(`⚠️ #${bookingId} 结算返回：${JSON.stringify(data)}`)
-      }
+      setMessage(data?.settled ? `✅ #${bookingId} 已结算` : `⚠️ #${bookingId} 结算返回：${JSON.stringify(data)}`)
     } catch (e: any) {
       setMessage(e?.message || '结算失败')
     } finally {
@@ -614,6 +587,7 @@ export default function AdminBookingsPage() {
           </div>
         )}
 
+        {/* 顶部统计 */}
         <div className="grid gap-3 md:grid-cols-4">
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
             <div className="text-xs text-neutral-400 mb-1">{dateLabel}</div>
@@ -633,6 +607,7 @@ export default function AdminBookingsPage() {
           </div>
         </div>
 
+        {/* 筛选 + 理发师 + 手动加单 */}
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900/50 p-4 space-y-3">
           <div className="flex flex-wrap items-center gap-3">
             <div className="flex items-center gap-2 text-sm">
@@ -735,6 +710,7 @@ export default function AdminBookingsPage() {
           </div>
         </div>
 
+        {/* 列表 */}
         <div className="rounded-2xl border border-neutral-800 bg-neutral-900/40 overflow-hidden">
           <div className="px-4 py-3 border-b border-neutral-800 flex items-center justify-between">
             <div className="text-sm font-medium">预约列表（筛选后 {filteredBookings.length} 条）</div>
@@ -766,9 +742,11 @@ export default function AdminBookingsPage() {
                   const isRowBusy = actioning?.id === bk.id
                   const busyKind = isRowBusy ? actioning?.kind : null
 
+                  const isSettled = String(bk.splitStatus || '').toLowerCase() === 'settled'
+
                   const canComplete = st === STATUS.SCHEDULED || st === STATUS.CONFIRMED
                   const canCancel = st === STATUS.SCHEDULED || st === STATUS.CONFIRMED
-                  const canSettle = st === STATUS.COMPLETED
+                  const canSettle = st === STATUS.COMPLETED && !isSettled // ✅ 核心修复
 
                   return (
                     <tr
@@ -777,9 +755,7 @@ export default function AdminBookingsPage() {
                     >
                       <td className="px-4 py-2 whitespace-nowrap">
                         <div className="text-neutral-100">{formatTime(bk.startTime)}</div>
-                        <div className="text-xs text-neutral-500">
-                          {new Date(bk.startTime).toISOString().slice(0, 10)}
-                        </div>
+                        <div className="text-xs text-neutral-500">{formatDate(new Date(bk.startTime))}</div>
                       </td>
                       <td className="px-4 py-2">{bk.barber?.name || '-'}</td>
                       <td className="px-4 py-2">
@@ -788,7 +764,14 @@ export default function AdminBookingsPage() {
                       </td>
                       <td className="px-4 py-2">{bk.service?.name || '-'}</td>
                       <td className="px-4 py-2 text-right">￥{formatMoney(price)}</td>
-                      <td className="px-4 py-2">{statusLabel(bk.status)}</td>
+
+                      <td className="px-4 py-2">
+                        {statusLabel(bk.status)}
+                        {isSettled && (
+                          <span className="ml-2 text-xs text-emerald-300">已结算</span>
+                        )}
+                      </td>
+
                       <td className="px-4 py-2">{sourceLabel(bk.source)}</td>
 
                       <td className="px-4 py-2 text-right">
@@ -830,7 +813,7 @@ export default function AdminBookingsPage() {
                               className="text-xs px-2.5 py-1 rounded-md border border-red-500/60 text-red-200 hover:bg-red-500/10 disabled:opacity-50"
                             >
                               {busyKind === 'cancel' ? '取消中…' : '取消'}
-                              </button>
+                            </button>
                           )}
                         </div>
                       </td>
@@ -840,10 +823,7 @@ export default function AdminBookingsPage() {
 
                 {filteredBookings.length === 0 && (
                   <tr>
-                    <td
-                      colSpan={8}
-                      className="px-4 py-10 text-center text-sm text-neutral-500"
-                    >
+                    <td colSpan={8} className="px-4 py-10 text-center text-sm text-neutral-500">
                       {loading ? '加载中…' : '暂无预约（换个筛选条件看看）'}
                     </td>
                   </tr>

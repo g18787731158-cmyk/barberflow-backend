@@ -13,7 +13,6 @@ function pad2(n: number) {
 }
 
 function cnMidnightMs(dateStr: string) {
-  // ✅ 中国当天 00:00
   const d = new Date(`${dateStr}T00:00:00+08:00`)
   const ms = d.getTime()
   return Number.isNaN(ms) ? null : ms
@@ -29,9 +28,8 @@ function cnGetYMDFromMs(ms: number) {
 }
 
 function cnDayOfWeekFromMs(ms: number) {
-  // 0(日)~6(六) —— 中国语义
   const x = new Date(ms + CN_OFFSET_MS)
-  return x.getUTCDay()
+  return x.getUTCDay() // 0(日)~6(六)
 }
 
 function rangeStartEndCN(dateStr: string, range: Range) {
@@ -43,7 +41,6 @@ function rangeStartEndCN(dateStr: string, range: Range) {
   }
 
   if (range === 'week') {
-    // 周一为起点
     const dow = cnDayOfWeekFromMs(baseMs) // 0=周日
     const diffToMon = dow === 0 ? -6 : 1 - dow
     const weekStartMs = baseMs + diffToMon * DAY_MS
@@ -51,7 +48,6 @@ function rangeStartEndCN(dateStr: string, range: Range) {
     return { start: new Date(weekStartMs), end: new Date(weekEndMs) }
   }
 
-  // month
   const { y, m } = cnGetYMDFromMs(baseMs)
   const monthStart = new Date(`${y}-${pad2(m)}-01T00:00:00+08:00`).getTime()
   const nextM = m === 12 ? 1 : m + 1
@@ -70,10 +66,7 @@ export async function GET(req: NextRequest) {
     const range: Range = rangeParam === 'week' || rangeParam === 'month' ? rangeParam : 'day'
 
     if (!dateStr) {
-      return NextResponse.json(
-        { error: '缺少 date（YYYY-MM-DD）' },
-        { status: 400 },
-      )
+      return NextResponse.json({ error: '缺少 date（YYYY-MM-DD）' }, { status: 400 })
     }
 
     const r = rangeStartEndCN(dateStr, range)
@@ -93,10 +86,18 @@ export async function GET(req: NextRequest) {
     const bookings = await prisma.booking.findMany({
       where,
       orderBy: { startTime: 'asc' },
-      include: {
-        shop: true,
-        barber: true,
-        service: true,
+      select: {
+        id: true,
+        userName: true,
+        phone: true,
+        startTime: true,
+        status: true,
+        price: true,
+        source: true,
+        splitStatus: true, // ✅ 给前端判断“已结算”
+        shop: { select: { name: true } },
+        barber: { select: { name: true } },
+        service: { select: { name: true, price: true } },
       },
     })
 

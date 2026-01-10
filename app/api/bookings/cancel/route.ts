@@ -29,14 +29,14 @@ function parsePosInt(v: unknown): number | null {
 
 /**
  * 规则：
- * - 取消 = status: CANCELED
+ * - 取消 = status: CANCELLED（双 L，统一口径）
  * - 释放时段 = slotLock: NULL（不是 false）
- * - 幂等：重复取消直接返回 ok
+ * - 幂等：重复取消直接返回 ok，并确保 slotLock 已释放、completedAt=null
  */
 export async function POST(req: NextRequest) {
   try {
     const body = await readJson(req)
-    const id = parsePosInt(body.id ?? body.bookingId) // ✅ 关键：兼容 bookingId
+    const id = parsePosInt(body.id ?? body.bookingId)
 
     if (!id) {
       return NextResponse.json({ ok: false, error: 'Missing or invalid id' }, { status: 400 })
@@ -45,30 +45,34 @@ export async function POST(req: NextRequest) {
     const result = await prisma.$transaction(async (tx) => {
       const b = await tx.booking.findUnique({
         where: { id },
-        select: { id: true, status: true, slotLock: true },
+        select: { id: true, status: true, slotLock: true, completedAt: true },
       })
 
       if (!b) return { kind: 'notfound' as const }
 
-      if (String(b.status).toUpperCase() === 'CANCELED' || String(b.status).toUpperCase() === 'CANCELLED') {
-        if (b.slotLock !== null) {
-          await tx.booking.update({
-            where: { id },
-            data: { slotLock: null },
-            select: { id: true },
-          })
+      const st = String(b.status || '').toUpperCase()
+      const isCancelled = st === 'CANCELLED' || st === 'CANCELED'
+
+      if (isCancelled) {
+        const patch: any = {}
+        if (b.slotLock !== null) patch.slotLock = null
+        if (b.completedAt !== null) patch.completedAt = null
+
+        if (Object.keys(patch).length) {
+          await tx.booking.update({ where: { id }, data: patch, select: { id: true } })
         }
-        return { kind: 'ok' as const, id, status: 'CANCELED', slotLock: false }
+
+        return { kind: 'ok' as const, id, status: 'CANCELLED', slotLock: false }
       }
 
       const updated = await tx.booking.update({
         where: { id },
         data: {
-          status: 'CANCELED',
+          status: 'CANCELLED',
           slotLock: null,
           completedAt: null,
         },
-        select: { id: true, status: true, slotLock: true },
+        select: { id: true, status: true },
       })
 
       return { kind: 'ok' as const, id: updated.id, status: updated.status, slotLock: false }

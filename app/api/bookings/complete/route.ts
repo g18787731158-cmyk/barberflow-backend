@@ -31,7 +31,7 @@ function parsePosInt(v: unknown): number | null {
  * 规则：
  * - 完成 = status: COMPLETED
  * - 释放时段 = slotLock: NULL（不是 false）
- * - 幂等：重复完成直接返回 ok，并确保 slotLock 已释放
+ * - 幂等：重复完成直接返回 ok，并确保 slotLock 已释放、completedAt 有值
  */
 export async function POST(req: NextRequest) {
   try {
@@ -50,21 +50,29 @@ export async function POST(req: NextRequest) {
 
       if (!b) return { kind: 'notfound' as const }
 
-      // 已完成：幂等 + 确保 slotLock=null
-      if (String(b.status).toUpperCase() === 'COMPLETED') {
-        if (b.slotLock !== null) {
-          await tx.booking.update({
-            where: { id },
-            data: { slotLock: null },
-            select: { id: true },
-          })
+      const isCompleted = String(b.status || '').toUpperCase() === 'COMPLETED'
+
+      // ✅ 幂等：已完成也要保证 slotLock=null + completedAt 有值
+      if (isCompleted) {
+        let completedAt = b.completedAt
+        const patch: any = {}
+
+        if (b.slotLock !== null) patch.slotLock = null
+        if (!completedAt) {
+          completedAt = new Date()
+          patch.completedAt = completedAt
         }
+
+        if (Object.keys(patch).length) {
+          await tx.booking.update({ where: { id }, data: patch, select: { id: true } })
+        }
+
         return {
           kind: 'ok' as const,
           id,
           status: 'COMPLETED',
           slotLock: false,
-          completedAt: b.completedAt?.toISOString() ?? null,
+          completedAt: completedAt ? completedAt.toISOString() : null,
           alreadyCompleted: true,
         }
       }

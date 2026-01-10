@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
           status: true,
           completedAt: true,
           price: true,
-          shopId: true,
+          splitStatus: true,
           shop: {
             select: {
               platformShareBasis: true,
@@ -69,11 +69,15 @@ export async function POST(req: NextRequest) {
         return { kind: 'not_completed' as const }
       }
 
+      // ✅ 保证 completedAt 有值（否则后面账目对不上）
       let patchedCompletedAt = false
+      const now = new Date()
+      const completedAt = booking.completedAt ?? now
+
       if (!booking.completedAt) {
         await tx.booking.update({
           where: { id },
-          data: { completedAt: new Date() },
+          data: { completedAt },
           select: { id: true },
         })
         patchedCompletedAt = true
@@ -119,6 +123,7 @@ export async function POST(req: NextRequest) {
         },
       })
 
+      // ✅ 写回 booking：已结算 + 明细
       await tx.booking.update({
         where: { id },
         data: {
@@ -135,7 +140,8 @@ export async function POST(req: NextRequest) {
         booking: {
           id: booking.id,
           status: 'COMPLETED',
-          completedAt: (booking.completedAt ?? new Date()).toISOString(),
+          completedAt: completedAt.toISOString(),
+          splitStatus: 'settled',
         },
         ledger,
         breakdown,

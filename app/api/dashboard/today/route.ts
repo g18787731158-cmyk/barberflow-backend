@@ -38,7 +38,7 @@ export async function GET(_req: NextRequest) {
 
     if (st === STATUS.SCHEDULED) scheduled += 1
     else if (st === STATUS.COMPLETED) completed += 1
-    else if (st === STATUS.CANCELLED) cancelled += 1
+    else if (st === STATUS.CANCELED) cancelled += 1
 
     const src = String(b.source || '').toLowerCase()
     if (src === 'miniapp') miniapp += 1

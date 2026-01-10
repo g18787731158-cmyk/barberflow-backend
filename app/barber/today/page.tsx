@@ -63,7 +63,7 @@ export default function BarberTodayPage() {
         completedAmount += price
       } else if (st === STATUS.SCHEDULED || st === STATUS.CONFIRMED) {
         scheduledCount += 1
-      } else if (st === STATUS.CANCELLED) {
+      } else if (st === STATUS.CANCELED) {
         cancelledCount += 1
       }
     }
@@ -232,7 +232,7 @@ export default function BarberTodayPage() {
               const statusText =
                 st === STATUS.COMPLETED
                   ? '已完成'
-                  : st === STATUS.CANCELLED
+                  : st === STATUS.CANCELED
                     ? '已取消'
                     : st === STATUS.CONFIRMED
                       ? '已确认'
