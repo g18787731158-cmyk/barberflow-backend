@@ -47,8 +47,8 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const code = body?.code;
     const barberId = Number(body?.barberId);
-    const bindCode = body?.bindCode; // 可选：绑定码
-    const force = Boolean(body?.force); // 可选：强制覆盖（测试用）
+    const bindCode = body?.bindCode;
+    const force = body?.force === true; // 更严格：只有 true 才算 true
 
     if (!code || typeof code !== "string") {
       return NextResponse.json({ ok: false, error: "missing code" }, { status: 400 });
@@ -57,7 +57,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "missing barberId" }, { status: 400 });
     }
 
-    // ✅ 可选安全阀：如果你在 ECS .env 配了 BARBER_BIND_CODE，就必须校验
+    // ✅ 如果 ECS .env 配了 BARBER_BIND_CODE，就必须校验
     const requiredBindCode = process.env.BARBER_BIND_CODE;
     if (requiredBindCode) {
       if (!bindCode || bindCode !== requiredBindCode) {
@@ -76,7 +76,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ ok: false, error: "barber not found" }, { status: 404 });
     }
 
-    // 已绑定且不是同一个 openid：默认不允许覆盖（更安全）
+    // 已绑定且不是同一个 openid：默认不允许覆盖
     if (barber.openid && barber.openid !== openid && !force) {
       return NextResponse.json(
         {
@@ -88,7 +88,6 @@ export async function POST(req: Request) {
       );
     }
 
-    // openid 唯一：如果 openid 已经绑定到别的 barber，会触发 unique 冲突
     const updated = await prisma.barber.update({
       where: { id: barberId },
       data: { openid },
@@ -97,14 +96,16 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, barber: updated });
   } catch (e: any) {
-    // Prisma unique 冲突 / 微信错误 / 其他错误都会进这里
+    // 微信错误 / Prisma unique 冲突 / 其他错误
+    const msg = String(e?.message || e);
+
+    // 如果是微信 code 无效，给 400 更直观
+    if (msg.includes("jscode2session failed")) {
+      return NextResponse.json({ ok: false, error: msg, wxDetail: e?.wxDetail ?? null }, { status: 400 });
+    }
+
     return NextResponse.json(
-      {
-        ok: false,
-        error: "server error",
-        detail: String(e?.message || e),
-        wxDetail: e?.wxDetail ?? null,
-      },
+      { ok: false, error: "server error", detail: msg, wxDetail: e?.wxDetail ?? null },
       { status: 500 }
     );
   }

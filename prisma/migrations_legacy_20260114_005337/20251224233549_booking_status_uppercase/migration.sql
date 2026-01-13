@@ -18,7 +18,7 @@ EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
 
 -- patch: ensure completedAt exists when replaying migrations on shadow db
-ALTER TABLE `booking` ADD COLUMN `completedAt` DATETIME(3) NULL;
+-- ALTER TABLE `booking` ADD COLUMN `completedAt` DATETIME(3) NULL;
 
 -- 1) 把默认值改成全大写
 ALTER TABLE `booking`

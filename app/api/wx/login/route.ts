@@ -1,19 +1,14 @@
+// app/api/wx/login/route.ts
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-// 避免被 Next 缓存（一般不会，但加上更稳）
-export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   try {
-    const body = await req.json().catch(() => ({}));
-    const code = body?.code;
+    const { code } = await req.json();
 
     if (!code || typeof code !== "string") {
-      return NextResponse.json(
-        { ok: false, error: "missing code" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "missing code" }, { status: 400 });
     }
 
     const appid = process.env.WECHAT_MP_APPID;
@@ -21,7 +16,7 @@ export async function POST(req: Request) {
 
     if (!appid || !secret) {
       return NextResponse.json(
-        { ok: false, error: "missing env WECHAT_MP_APPID/WECHAT_MP_SECRET" },
+        { error: "server env missing WECHAT_MP_APPID/WECHAT_MP_SECRET" },
         { status: 500 }
       );
     }
@@ -36,30 +31,29 @@ export async function POST(req: Request) {
     const r = await fetch(url, { method: "GET" });
     const data = await r.json();
 
-    // 微信失败示例：{ errcode: 40029, errmsg: "invalid code" }
-    if (data?.errcode) {
+    // 微信返回错误示例：{ errcode: 40029, errmsg: "invalid code" }
+    if (data.errcode) {
       return NextResponse.json(
-        { ok: false, error: "jscode2session failed", detail: data },
+        { error: "wx jscode2session failed", detail: data },
         { status: 400 }
       );
     }
 
-    // 重要：session_key 不能返回给前端
-    const openid = data?.openid as string | undefined;
-    const unionid = data?.unionid as string | undefined;
+    // 重要：session_key 不要回给前端
+    const { openid, unionid } = data as { openid: string; unionid?: string };
 
     if (!openid) {
       return NextResponse.json(
-        { ok: false, error: "wx response missing openid", detail: data },
+        { error: "wx response missing openid", detail: data },
         { status: 400 }
       );
     }
 
-    // MVP：先直接回 openid（下一步再改成后端签发 token）
+    // MVP：先直接回 openid（后面我们会换成你后端签发的 session token）
     return NextResponse.json({ ok: true, openid, unionid: unionid ?? null });
   } catch (e: any) {
     return NextResponse.json(
-      { ok: false, error: "server error", detail: String(e?.message || e) },
+      { error: "server error", detail: String(e?.message || e) },
       { status: 500 }
     );
   }

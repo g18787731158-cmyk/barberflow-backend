@@ -14,6 +14,12 @@ model barber {
   shopId        Int
   workStartHour Int
   workEndHour   Int
+
+  /// ✅ 新增：绑定小程序用户 openid（用于分账/打款接收方）
+  /// 一个小程序下 openid 唯一，所以加 unique
+  openid String? @unique
+
+
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
 
