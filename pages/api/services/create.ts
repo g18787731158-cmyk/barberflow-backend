@@ -1,5 +1,6 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
 import prisma from '../../../lib/prisma';
+import { requireAdminPages } from '@/lib/auth/admin-pages';
 
 type Data =
   | {
@@ -16,6 +17,8 @@ export default async function handler(
   req: NextApiRequest,
   res: NextApiResponse<Data>
 ) {
+  if (!requireAdminPages(req, res)) return;
+
   if (req.method !== 'POST') {
     res.setHeader('Allow', 'POST');
     return res

@@ -2,6 +2,7 @@ import type { NextApiRequest, NextApiResponse } from 'next'
 import prisma from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
 import type { Prisma } from '@prisma/client'
+import { requireAdminPages } from '@/lib/auth/admin-pages'
 
 type Tx = Prisma.TransactionClient
 
@@ -48,6 +49,8 @@ async function getServiceDuration(tx: Tx, serviceId: number) {
 }
 
 export default async function handler(req: NextApiRequest, res: NextApiResponse) {
+  if (!requireAdminPages(req, res)) return
+
   if (req.method !== 'POST') {
     return res.status(405).json({ success: false, message: 'Method Not Allowed' })
   }

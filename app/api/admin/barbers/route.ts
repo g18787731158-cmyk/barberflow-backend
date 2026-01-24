@@ -1,25 +1,9 @@
 import { NextResponse } from "next/server";
-import { PrismaClient } from "@prisma/client";
+import prisma from "@/lib/prisma";
+import { requireAdmin } from "@/lib/auth/admin";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
-const prisma = globalForPrisma.prisma ?? new PrismaClient();
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
-
-function requireAdmin(req: Request) {
-  const token = req.headers.get("x-admin-token") || "";
-  const expected = process.env.ADMIN_TOKEN || "";
-  if (!expected) {
-    // 没配 ADMIN_TOKEN 就直接拒绝（避免裸奔）
-    return { ok: false, res: NextResponse.json({ ok: false, error: "ADMIN_TOKEN not set" }, { status: 500 }) };
-  }
-  if (token !== expected) {
-    return { ok: false, res: NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 }) };
-  }
-  return { ok: true as const };
-}
 
 // GET /api/admin/barbers?shopId=1
 export async function GET(req: Request) {

@@ -1,6 +1,7 @@
 // app/api/admin/timeoff/route.ts
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth/admin'
 
 export const runtime = 'nodejs'
 
@@ -94,6 +95,9 @@ function addDays(date: Date, days: number) {
  *  - DAILY: startTime/endTime(HH:mm) 或 startMinute/endMinute
  */
 export async function GET(req: NextRequest) {
+  const auth = requireAdmin(req)
+  if (!auth.ok) return auth.res
+
   try {
     const barberId = parsePosInt(req.nextUrl.searchParams.get('barberId'))
     if (!barberId) {
@@ -113,6 +117,9 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireAdmin(req)
+  if (!auth.ok) return auth.res
+
   try {
     const body = await readJson(req)
 

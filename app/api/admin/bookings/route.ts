@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth/admin'
 
 export const runtime = 'nodejs'
 
@@ -57,6 +58,9 @@ function rangeStartEndCN(dateStr: string, range: Range) {
 }
 
 export async function GET(req: NextRequest) {
+  const auth = requireAdmin(req)
+  if (!auth.ok) return auth.res
+
   try {
     const { searchParams } = new URL(req.url)
     const dateStr = searchParams.get('date')

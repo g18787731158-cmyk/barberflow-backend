@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth/admin'
 
 function floorInt(n: number) {
   return Math.floor(n)
 }
 
 export async function POST(req: Request) {
+  const auth = requireAdmin(req)
+  if (!auth.ok) return auth.res
+
   try {
     const body = await req.json().catch(() => ({}))
     const bookingId = Number(body.bookingId)

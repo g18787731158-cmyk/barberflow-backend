@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth/admin'
 
 export const runtime = 'nodejs'
 
@@ -32,6 +33,9 @@ function clamp(n: number, min: number, max: number) {
 }
 
 export async function POST(req: Request) {
+  const auth = requireAdmin(req)
+  if (!auth.ok) return auth.res
+
   const body = await readJson(req)
   if (!body) {
     return NextResponse.json({ ok: false, error: '请求体必须是 JSON 对象' }, { status: 400 })

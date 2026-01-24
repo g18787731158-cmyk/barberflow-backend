@@ -1,6 +1,14 @@
 import { NextResponse } from 'next/server';
+import { requireAdmin } from '@/lib/auth/admin';
 
-export async function POST() {
+export async function POST(req: Request) {
+  if (process.env.NODE_ENV === 'production') {
+    return NextResponse.json({ error: 'not found' }, { status: 404 });
+  }
+
+  const auth = requireAdmin(req);
+  if (!auth.ok) return auth.res;
+
   // 模拟一笔订单金额 1 元
   const total = 1;
 
