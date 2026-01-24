@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth/admin'
 
 export async function PATCH(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }, // params 是 Promise
 ) {
+  const auth = requireAdmin(request)
+  if (!auth.ok) return auth.res
+
   // ✅ 关键：解开 Promise 拿到 id
   const { id: rawId } = await context.params
   const bookingId = Number(rawId)

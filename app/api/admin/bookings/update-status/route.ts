@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
+import { requireAdmin } from '@/lib/auth/admin'
 
 function normalize(status: string) {
   return String(status || '').trim().toUpperCase()
@@ -22,6 +23,9 @@ function derive(status: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = requireAdmin(req)
+  if (!auth.ok) return auth.res
+
   try {
     const body = await req.json().catch(() => ({}))
     const id = Number(body?.id)
