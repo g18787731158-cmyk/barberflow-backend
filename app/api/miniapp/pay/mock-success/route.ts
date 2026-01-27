@@ -5,11 +5,15 @@ import { requireAdmin } from '@/lib/auth/admin'
 export const runtime = 'nodejs'
 
 export async function POST(req: Request) {
-  if (process.env.NODE_ENV === 'production') {
+  // 先做管理员校验
+  const auth = requireAdmin(req)
+
+  // ✅ 生产环境：未带正确 token 时，直接 404（对外隐藏接口存在）
+  if (process.env.NODE_ENV === 'production' && !auth.ok) {
     return NextResponse.json({ error: 'not found' }, { status: 404 })
   }
 
-  const auth = requireAdmin(req)
+  // 非生产环境：按原逻辑返回真实的鉴权错误
   if (!auth.ok) return auth.res
 
   try {
@@ -24,6 +28,7 @@ export async function POST(req: Request) {
       where: { id: bookingId },
       select: { id: true, payStatus: true },
     })
+
     if (!booking) {
       return NextResponse.json({ ok: false, error: 'booking 不存在' }, { status: 404 })
     }
