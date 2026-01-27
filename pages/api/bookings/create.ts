@@ -1,7 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
-import type { Prisma } from '@prisma/client'
+import type { Prisma } from '@/lib/prisma'
 import { requireAdminPages } from '@/lib/auth/admin-pages'
 
 type Tx = Prisma.TransactionClient

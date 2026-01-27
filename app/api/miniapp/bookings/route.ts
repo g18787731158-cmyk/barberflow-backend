@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
-import type { Prisma } from '@prisma/client'
+import type { Prisma } from '@/lib/prisma'
 
 type Tx = Prisma.TransactionClient
 export const runtime = 'nodejs'

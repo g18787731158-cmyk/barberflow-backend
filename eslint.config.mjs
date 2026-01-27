@@ -27,6 +27,24 @@ const eslintConfig = defineConfig([
           caughtErrorsIgnorePattern: "^_",
         },
       ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@prisma/client",
+              message: "Use lib/prisma.ts as the only Prisma client entry.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "NewExpression[callee.name='PrismaClient']",
+          message: "Use lib/prisma.ts as the only Prisma client entry.",
+        },
+      ],
     },
   },
 
@@ -66,6 +84,14 @@ const eslintConfig = defineConfig([
     ],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+
+  {
+    files: ["lib/prisma.ts"],
+    rules: {
+      "no-restricted-imports": "off",
+      "no-restricted-syntax": "off",
     },
   },
 ]);
