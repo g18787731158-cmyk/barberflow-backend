@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { STATUS, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -64,8 +65,8 @@ export async function POST(req: NextRequest) {
 
       if (!booking) return { kind: 'notfound' as const }
 
-      const st = String(booking.status || '').toUpperCase()
-      if (st !== 'COMPLETED') {
+      const st = canonStatus(booking.status)
+      if (st !== STATUS.COMPLETED) {
         return { kind: 'not_completed' as const }
       }
 
@@ -139,7 +140,7 @@ export async function POST(req: NextRequest) {
         patchedCompletedAt,
         booking: {
           id: booking.id,
-          status: 'COMPLETED',
+          status: STATUS.COMPLETED,
           completedAt: completedAt.toISOString(),
           splitStatus: 'settled',
         },

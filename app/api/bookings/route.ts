@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import type { Prisma } from '@/lib/prisma'
+import { STATUS, STATUS_CANCEL } from '@/lib/status'
 import {
   startOfBizDayUtc,
   endOfBizDayUtc,
@@ -158,7 +159,7 @@ export async function POST(req: NextRequest) {
             startTime: { gte: dayStart, lt: dayEnd },
             slotLock: true,
             // ✅ 同时兼容两种拼法（你项目里两个都出现过）
-            status: { notIn: ['CANCELLED', 'CANCELED'] as any },
+            status: { notIn: [STATUS_CANCEL] as any },
           },
           include: { service: { select: { durationMinutes: true } } },
           orderBy: { startTime: 'asc' },
@@ -182,7 +183,7 @@ export async function POST(req: NextRequest) {
             phone: phone ? String(phone) : null,
             startTime: start,
             source: source || 'web',
-            status: 'SCHEDULED',
+            status: STATUS.SCHEDULED,
             slotLock: true,
             price: finalPrice,
           },

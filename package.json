@@ -7,6 +7,7 @@
     "build": "TZ=Asia/Shanghai next build",
     "start": "TZ=Asia/Shanghai next start",
     "lint": "eslint",
+    "check:status": "rg -n \"'CANCELED'|\\\"CANCELED\\\"|'CANCELLED'|\\\"CANCELLED\\\"|'SCHEDULED'|\\\"SCHEDULED\\\"|'CONFIRMED'|\\\"CONFIRMED\\\"|'COMPLETED'|\\\"COMPLETED\\\"|'NO_SHOW'|\\\"NO_SHOW\\\"\" . -g\"*.{ts,tsx,js,mjs,cjs}\" --glob '!lib/status.ts' --glob '!lib/bookingStatus.ts' --glob '!eslint.config.mjs' --glob '!node_modules/**' --glob '!.next/**' --glob '!dist/**'",
     "prisma:generate": "prisma generate",
     "postinstall": "prisma generate"
   },

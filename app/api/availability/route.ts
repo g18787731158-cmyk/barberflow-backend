@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { STATUS_CANCEL } from '@/lib/status'
 import {
   startOfBizDayUtc,
   endOfBizDayUtc,
@@ -33,7 +34,7 @@ export async function GET(req: NextRequest) {
         barberId,
         startTime: { gte: dayStart, lt: dayEnd }, // ✅ lt 次日0点
         slotLock: true, // ✅ 取消后 slotLock=null，自然就不占位了
-        status: { notIn: ['CANCELLED', 'CANCELED', 'CANCELED', 'CANCELED', 'CANCELED'] as any },
+        status: { notIn: [STATUS_CANCEL] as any },
       },
       include: {
         service: { select: { durationMinutes: true } },

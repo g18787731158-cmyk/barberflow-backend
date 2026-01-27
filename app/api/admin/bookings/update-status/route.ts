@@ -1,16 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/auth/admin'
+import { STATUS, STATUS_CANCEL, toBookingStatus, type BookingStatus } from '@/lib/status'
 
-function normalize(status: string) {
-  return String(status || '').trim().toUpperCase()
-}
-
-function derive(status: string) {
+function derive(status: BookingStatus) {
   // ✅ 规则核心：锁只跟“会占用未来时段”的状态走
   // 你后面加 CONFIRMED / CHECKED_IN 都很方便往这里塞
-  const lockStatuses = new Set(['SCHEDULED', 'CONFIRMED'])
-  const unlockStatuses = new Set(['CANCELED', 'COMPLETED', 'NO_SHOW'])
+  const lockStatuses = new Set<BookingStatus>([STATUS.SCHEDULED, STATUS.CONFIRMED])
+  const unlockStatuses = new Set<BookingStatus>([STATUS_CANCEL, STATUS.COMPLETED, STATUS.NO_SHOW])
 
   if (unlockStatuses.has(status)) {
     return { slotLock: false }
@@ -29,7 +26,7 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({}))
     const id = Number(body?.id)
-    const status = normalize(body?.status)
+    const status = toBookingStatus(body?.status)
 
     if (!id || Number.isNaN(id)) {
       return NextResponse.json({ error: 'Missing or invalid id' }, { status: 400 })
@@ -57,10 +54,10 @@ export async function POST(req: NextRequest) {
     }
 
     // completedAt 规则：完成才补；非完成可以清空（你想保留历史就把这段改掉）
-    if (status === 'COMPLETED') {
+    if (status === STATUS.COMPLETED) {
       data.completedAt = booking.completedAt ?? new Date()
       data.slotLock = false
-    } else if (status === 'CANCELED') {
+    } else if (status === STATUS_CANCEL) {
       data.completedAt = null
       data.slotLock = false
     }

@@ -1,6 +1,7 @@
 // app/api/barbers/stats/route.ts
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { STATUS } from '@/lib/status'
 import {
   bizDateString,
   startOfBizDayUtc,
@@ -39,7 +40,7 @@ export async function GET(request: Request) {
   const todayCompleted = await prisma.booking.findMany({
     where: {
       barberId,
-      status: 'COMPLETED',
+      status: STATUS.COMPLETED,
       startTime: { gte: startToday, lt: endToday },
     },
     select: { price: true, payAmount: true },
@@ -49,7 +50,7 @@ export async function GET(request: Request) {
   const weekCompleted = await prisma.booking.findMany({
     where: {
       barberId,
-      status: 'COMPLETED',
+      status: STATUS.COMPLETED,
       startTime: { gte: startWeek, lt: endWeek },
     },
     select: { price: true, payAmount: true },
@@ -59,7 +60,7 @@ export async function GET(request: Request) {
   const monthCompleted = await prisma.booking.findMany({
     where: {
       barberId,
-      status: 'COMPLETED',
+      status: STATUS.COMPLETED,
       startTime: { gte: startMonth, lt: endMonth },
     },
     select: { price: true, payAmount: true },
@@ -67,7 +68,7 @@ export async function GET(request: Request) {
 
   // 累计完成（不限制日期）
   const totalCompleted = await prisma.booking.findMany({
-    where: { barberId, status: 'COMPLETED' },
+    where: { barberId, status: STATUS.COMPLETED },
     select: { price: true, payAmount: true },
   })
 

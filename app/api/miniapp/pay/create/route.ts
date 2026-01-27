@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/prisma'
+import { STATUS, STATUS_CANCEL, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -45,10 +46,10 @@ export async function POST(req: Request) {
       }
     }
 
-    const status = String(bookingAny.status ?? '').toUpperCase()
+    const status = canonStatus(bookingAny.status)
     const payStatus = String(bookingAny.payStatus ?? '').toLowerCase()
 
-    if (['CANCELED', 'CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(status)) {
+    if ([STATUS_CANCEL, STATUS.COMPLETED, STATUS.NO_SHOW].includes(status as any)) {
       return NextResponse.json({ ok: false, error: 'booking 不可支付' }, { status: 409 })
     }
 
