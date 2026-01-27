@@ -3,6 +3,7 @@ import { prisma } from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
 import type { Prisma } from '@/lib/prisma'
 import { requireAdminPages } from '@/lib/auth/admin-pages'
+import { parseClientTimeToUtcDate, bizDateString, startOfBizDayUtc, endOfBizDayUtc } from '@/lib/tz'
 
 type Tx = Prisma.TransactionClient
 
@@ -10,18 +11,6 @@ const SLOT_MINUTES = 30
 
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
-}
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
-}
-function dateToYMD(d: Date) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
-}
-function buildDayRange(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const start = new Date(y, m - 1, d, 0, 0, 0)
-  const end = new Date(y, m - 1, d + 1, 0, 0, 0)
-  return { start, end }
 }
 
 async function calcFinalPrice(tx: Tx, barberId: number, serviceId: number) {
@@ -69,12 +58,12 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       })
     }
 
-    const start = new Date(String(startTime))
-    if (Number.isNaN(start.getTime())) {
+    const start = parseClientTimeToUtcDate(startTime)
+    if (!start) {
       return res.status(400).json({ success: false, message: 'startTime 不合法' })
     }
 
-    const dateStr = dateToYMD(start)
+    const dateStr = bizDateString(start)
     const lockKey = `bf:barber:${barberIdNum}:${dateStr}`
 
     const result = await prisma.$transaction(async (tx) => {
@@ -85,7 +74,8 @@ export default async function handler(req: NextApiRequest, res: NextApiResponse)
       if (got !== 1) return { kind: 'busy' as const }
 
       try {
-        const { start: dayStart, end: dayEnd } = buildDayRange(dateStr)
+        const dayStart = startOfBizDayUtc(dateStr)
+        const dayEnd = endOfBizDayUtc(dateStr)
 
         const duration = await getServiceDuration(tx, serviceIdNum)
         const newEnd = addMinutes(start, duration)

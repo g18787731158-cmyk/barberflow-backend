@@ -1,6 +1,6 @@
 // pages/shops/[shopId]/barbers.tsx
 import type { GetServerSideProps } from 'next'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 
 type Props = {
   shopId: number

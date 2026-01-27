@@ -1,6 +1,14 @@
 // app/api/miniapp/available-slots/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
+import {
+  startOfBizDayUtc,
+  endOfBizDayUtc,
+  parseClientTimeToUtcDate,
+  addBizDays,
+  bizDateString,
+  utcDateToBizMinutes,
+} from '@/lib/tz'
 
 export const runtime = 'nodejs'
 
@@ -11,34 +19,17 @@ function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
 }
 
-function addDays(date: Date, days: number) {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
-}
-
 function pad2(n: number) {
   return String(n).padStart(2, '0')
 }
 
-function formatYMD(d: Date) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
-}
-
-function buildDayRange(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const start = new Date(y, m - 1, d, 0, 0, 0)
-  const end = new Date(y, m - 1, d + 1, 0, 0, 0)
-  return { start, end }
-}
-
-// "2025-12-06" + "14:30" => Date（按服务器时区）
-function buildStartTime(dateStr: string, timeStr: string): Date {
-  return new Date(`${dateStr}T${timeStr}:00`)
+// "2025-12-06" + "14:30" => Date（按业务时区解析）
+function buildStartTime(dateStr: string, timeStr: string): Date | null {
+  return parseClientTimeToUtcDate(`${dateStr}T${timeStr}:00`)
 }
 
 function minutesSince00(d: Date) {
-  return d.getHours() * 60 + d.getMinutes()
+  return utcDateToBizMinutes(d)
 }
 
 function overlap(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
@@ -54,12 +45,15 @@ export async function GET(req: NextRequest) {
     if (!date || !barberId || !serviceId || Number.isNaN(barberId) || Number.isNaN(serviceId)) {
       return NextResponse.json({ error: 'Missing date/barberId/serviceId' }, { status: 400 })
     }
+    if (!parseClientTimeToUtcDate(date)) {
+      return NextResponse.json({ error: 'Invalid date' }, { status: 400 })
+    }
 
-    const now = new Date()
-    const minDateStr = formatYMD(addDays(now, MIN_ADVANCE_DAYS))
+    const minDateStr = addBizDays(bizDateString(), MIN_ADVANCE_DAYS)
     const calendarTooEarly = date < minDateStr
 
-    const { start: dayStart, end: dayEnd } = buildDayRange(date)
+    const dayStart = startOfBizDayUtc(date)
+    const dayEnd = endOfBizDayUtc(date)
 
     const [barber, service, bookings, timeoffs] = await prisma.$transaction([
       prisma.barber.findUnique({
@@ -100,13 +94,13 @@ export async function GET(req: NextRequest) {
       for (const m of [0, 30]) {
         const time = `${pad2(h)}:${pad2(m)}`
         const st = buildStartTime(date, time)
-        if (Number.isNaN(st.getTime())) continue
+        if (!st) continue
 
         const en = addMinutes(st, duration)
 
         // 超出营业结束
-        const endBoundary = new Date(dayStart)
-        endBoundary.setHours(endH, 0, 0, 0)
+        const endBoundary = buildStartTime(date, `${pad2(endH)}:00`)
+        if (!endBoundary) continue
         if (en > endBoundary) continue
 
         let disabled = false
