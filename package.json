@@ -8,6 +8,10 @@
     "start": "TZ=Asia/Shanghai next start",
     "lint": "eslint",
     "check:status": "sh -c 'rg -n \"CANCELED|CANCELLED\" lib app pages -g\"*.{ts,tsx,js,mjs,cjs}\" --glob \"!lib/status.ts\" --glob \"!lib/bookingStatus.ts\" --glob \"!eslint.config.mjs\" --glob \"!node_modules/**\" --glob \"!.next/**\" --glob \"!dist/**\"; code=$?; if [ $code -eq 0 ]; then echo \"Found forbidden status literals (use lib/status.ts constants instead).\"; exit 1; elif [ $code -eq 1 ]; then echo \"OK: no forbidden status literals found.\"; exit 0; else exit $code; fi'",
+    "db:audit": "node scripts/migration-audit.mjs",
+    "db:check": "npm run db:audit && git diff --quiet docs/MIGRATION_RISK_REGISTER.md",
+    "db:migrate:deploy": "bash scripts/db-migrate-deploy.sh",
+    "db:validate": "npx prisma validate",
     "prisma:generate": "prisma generate",
     "postinstall": "prisma generate"
   },
