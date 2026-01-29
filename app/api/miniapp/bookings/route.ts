@@ -1,7 +1,14 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { STATUS } from '@/lib/status'
-import type { Prisma } from '@prisma/client'
+import type { Prisma } from '@/lib/prisma'
+import {
+  startOfBizDayUtc,
+  endOfBizDayUtc,
+  parseClientTimeToUtcDate,
+  bizDateString,
+  addBizDays,
+} from '@/lib/tz'
 
 type Tx = Prisma.TransactionClient
 export const runtime = 'nodejs'
@@ -42,27 +49,9 @@ const MIN_ADVANCE_DAYS = 1
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
 }
-function addDays(date: Date, days: number) {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
-}
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
-}
-function formatYMD(d: Date) {
-  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`
-}
 
-function buildDayRange(dateStr: string) {
-  const [y, m, d] = dateStr.split('-').map(Number)
-  const start = new Date(y, m - 1, d, 0, 0, 0)
-  const end = new Date(y, m - 1, d + 1, 0, 0, 0)
-  return { start, end }
-}
-
-function buildStartTime(dateStr: string, timeStr: string): Date {
-  return new Date(`${dateStr}T${timeStr}:00`)
+function buildStartTime(dateStr: string, timeStr: string): Date | null {
+  return parseClientTimeToUtcDate(`${dateStr}T${timeStr}:00`)
 }
 
 function overlaps(aStart: Date, aEnd: Date, bStart: Date, bEnd: Date) {
@@ -117,15 +106,18 @@ export async function POST(req: Request) {
   if (!shopId || !barberId || !serviceId || !date || !time || !userName || !phone) {
     return NextResponse.json({ error: '缺少必要字段' }, { status: 400 })
   }
+  if (!parseClientTimeToUtcDate(date)) {
+    return NextResponse.json({ error: 'date 格式不正确' }, { status: 400 })
+  }
 
   // 今天只能约明天起（按日历天）
-  const minDateStr = formatYMD(addDays(new Date(), MIN_ADVANCE_DAYS))
+  const minDateStr = addBizDays(bizDateString(), MIN_ADVANCE_DAYS)
   if (date < minDateStr) {
     return NextResponse.json({ ok: false, error: '需至少提前一天预约' }, { status: 400 })
   }
 
   const startTime = buildStartTime(date, time)
-  if (Number.isNaN(startTime.getTime())) {
+  if (!startTime) {
     return NextResponse.json({ error: 'date/time 格式不正确' }, { status: 400 })
   }
 
@@ -141,7 +133,8 @@ export async function POST(req: Request) {
       if (got !== 1) return { kind: 'busy' as const }
 
       try {
-        const { start: dayStart, end: dayEnd } = buildDayRange(date)
+        const dayStart = startOfBizDayUtc(date)
+        const dayEnd = endOfBizDayUtc(date)
 
         const duration = await getServiceDuration(tx, serviceId)
         const newEnd = addMinutes(startTime, duration)

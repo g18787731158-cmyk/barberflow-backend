@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { STATUS, canonStatus } from '@/lib/status'
+import { STATUS, STATUS_CANCEL, canonStatus } from '@/lib/status'
 
 type Barber = {
   id: number
@@ -48,7 +48,7 @@ function formatMoney(amount: number) {
 function statusLabel(raw: string) {
   const st = canonStatus(raw)
   if (st === STATUS.COMPLETED) return '已完成'
-  if (st === STATUS.CANCELED) return '已取消'
+  if (st === STATUS_CANCEL) return '已取消'
   if (st === STATUS.CONFIRMED) return '已确认'
   if (st === STATUS.SCHEDULED) return '已预约'
   return String(raw || '')
@@ -142,7 +142,7 @@ export default function AdminBookingsPage() {
         } else if (statusFilter === 'completed') {
           if (st !== STATUS.COMPLETED) return false
         } else if (statusFilter === 'cancelled') {
-          if (st !== STATUS.CANCELED) return false
+          if (st !== STATUS_CANCEL) return false
         }
       }
 

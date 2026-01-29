@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { STATUS, canonStatus } from '@/lib/status'
+import { STATUS, STATUS_CANCEL, canonStatus } from '@/lib/status'
 
 type StatPack = {
   todayCount: number
@@ -108,7 +108,7 @@ export default function BarberStatsClient() {
         const statusText =
           st === STATUS.COMPLETED
             ? '已完成'
-            : st === STATUS.CANCELED
+            : st === STATUS_CANCEL
               ? '已取消'
               : st === STATUS.CONFIRMED
                 ? '已确认'

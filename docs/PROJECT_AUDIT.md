@@ -71,3 +71,12 @@
 3) **修复 `lib/time.ts` 混入 PrismaClient**：拆分/清理，避免意外导出和重复连接。
 4) **时区处理统一**：明确统一使用 `+08:00` 或 UTC，并抽成公共工具，避免跨服务/跨环境时间漂移。
 5) **状态常量与迁移历史整理**：合并状态定义（取消 `CANCELED/CANCELLED` 混用），并明确 legacy SQL/迁移来源以避免 schema 漂移。
+
+## Status Policy
+
+- 标准状态拼写：`CANCELED`（单 L）。
+- 任何状态比较/赋值/where/update 必须使用 `lib/status.ts` 导出的常量（`BOOKING_STATUS` / `STATUS_CANCEL` 等）。
+- 外部输入（query/body）必须先通过 `toBookingStatus` / `canonStatus` 归一化。
+- 业务代码中禁止出现 `CANCELED` / `CANCELLED` 字面量。
+- `check:status` 与 ESLint 规则为门禁。
+- prisma migrations/历史文档允许保留旧字符串（不做历史篡改）。

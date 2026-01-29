@@ -2,7 +2,7 @@
 
 import React, { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
-import { STATUS, canonStatus } from '@/lib/status'
+import { STATUS, STATUS_CANCEL, canonStatus } from '@/lib/status'
 
 type Barber = { id: number; name: string }
 type BookingItem = {
@@ -63,7 +63,7 @@ export default function BarberTodayPage() {
         completedAmount += price
       } else if (st === STATUS.SCHEDULED || st === STATUS.CONFIRMED) {
         scheduledCount += 1
-      } else if (st === STATUS.CANCELED) {
+      } else if (st === STATUS_CANCEL) {
         cancelledCount += 1
       }
     }
@@ -232,7 +232,7 @@ export default function BarberTodayPage() {
               const statusText =
                 st === STATUS.COMPLETED
                   ? '已完成'
-                  : st === STATUS.CANCELED
+                  : st === STATUS_CANCEL
                     ? '已取消'
                     : st === STATUS.CONFIRMED
                       ? '已确认'

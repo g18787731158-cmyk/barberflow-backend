@@ -27,6 +27,48 @@ const eslintConfig = defineConfig([
           caughtErrorsIgnorePattern: "^_",
         },
       ],
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@prisma/client",
+              message: "Use lib/prisma.ts as the only Prisma client entry.",
+            },
+          ],
+        },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        {
+          selector: "NewExpression[callee.name='PrismaClient']",
+          message: "Use lib/prisma.ts as the only Prisma client entry.",
+        },
+        {
+          selector: "Literal[value='CANCELED']",
+          message: "Use BOOKING_STATUS/STATUS constants from lib/status.ts.",
+        },
+        {
+          selector: "Literal[value='CANCELLED']",
+          message: "Use BOOKING_STATUS/STATUS constants from lib/status.ts.",
+        },
+        {
+          selector: "Literal[value='SCHEDULED']",
+          message: "Use BOOKING_STATUS/STATUS constants from lib/status.ts.",
+        },
+        {
+          selector: "Literal[value='CONFIRMED']",
+          message: "Use BOOKING_STATUS/STATUS constants from lib/status.ts.",
+        },
+        {
+          selector: "Literal[value='COMPLETED']",
+          message: "Use BOOKING_STATUS/STATUS constants from lib/status.ts.",
+        },
+        {
+          selector: "Literal[value='NO_SHOW']",
+          message: "Use BOOKING_STATUS/STATUS constants from lib/status.ts.",
+        },
+      ],
     },
   },
 
@@ -66,6 +108,20 @@ const eslintConfig = defineConfig([
     ],
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
+    },
+  },
+
+  {
+    files: ["lib/prisma.ts"],
+    rules: {
+      "no-restricted-imports": "off",
+      "no-restricted-syntax": "off",
+    },
+  },
+  {
+    files: ["lib/status.ts", "lib/bookingStatus.ts"],
+    rules: {
+      "no-restricted-syntax": "off",
     },
   },
 ]);

@@ -1,163 +1,93 @@
 import Link from 'next/link'
 
+const ENTRIES = [
+  {
+    title: '店主管理',
+    desc: '看预约、看收入、调排班，一站式门店经营面板。',
+    href: '/shop-owner',
+    tag: 'Shop Owner',
+  },
+  {
+    title: '理发师后台',
+    desc: '今日预约、个人业绩、快速标记完成。',
+    href: '/barber',
+    tag: 'Barber Console',
+  },
+  {
+    title: '客户页面',
+    desc: '自助预约与查询，复约更方便。',
+    href: '/customer',
+    tag: 'Customer Portal',
+  },
+  {
+    title: '平台管理',
+    desc: '全站门店、收入、支付、预约监控。',
+    href: '/platform',
+    tag: 'Platform Command',
+  },
+]
+
 export default function HomePage() {
   return (
-    <main
-      style={{
-        minHeight: '100vh',
-        backgroundColor: '#000',
-        color: '#fff',
-        padding: '40px 20px',
-        display: 'flex',
-        justifyContent: 'center',
-      }}
-    >
-      <div
-        style={{
-          width: '100%',
-          maxWidth: 520,
-        }}
-      >
-        {/* 顶部标题 */}
-        <header style={{ marginBottom: '32px' }}>
-          <div
-            style={{
-              fontSize: '13px',
-              opacity: 0.7,
-              marginBottom: '4px',
-              letterSpacing: '0.08em',
-              textTransform: 'uppercase',
-            }}
-          >
-            BarberFlow · 1.0 内测
-          </div>
-          <h1
-            style={{
-              fontSize: '26px',
-              fontWeight: 600,
-              marginBottom: '10px',
-            }}
-          >
-            理发店预约 & 营收小助手
-          </h1>
-          <p
-            style={{
-              fontSize: '14px',
-              opacity: 0.8,
-              lineHeight: 1.6,
-            }}
-          >
-            目前支持：单门店、多理发师。
-            客人可以在线选理发师、选项目、选时间；
-            老板可以在后台查看今日预约和预估营收。
-          </p>
-        </header>
+    <main className="min-h-screen bg-neutral-950 text-neutral-50">
+      <div className="relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(255,255,255,0.08),_transparent_55%)]" />
+        <div className="relative mx-auto max-w-6xl px-6 py-12">
+          <header className="mb-10">
+            <div className="text-xs uppercase tracking-[0.3em] text-neutral-400">BarberFlow OS</div>
+            <h1 className="mt-3 text-4xl font-semibold" style={{ fontFamily: '"Bebas Neue", "Oswald", sans-serif' }}>
+              理发店 SaaS · H5 运营中枢
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm text-neutral-400">
+              统一入口，覆盖店主、理发师、客户与平台管理员。轻量移动端体验，支持桌面查看。
+            </p>
+          </header>
 
-        {/* 入口卡片 */}
-        <section
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '16px',
-            marginBottom: '32px',
-          }}
-        >
-          {/* 客人入口 */}
-          <Link
-            href="/booking"
-            style={{
-              display: 'block',
-              padding: '16px 18px',
-              borderRadius: 14,
-              border: '1px solid rgba(255,255,255,0.2)',
-              background:
-                'linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02))',
-              textDecoration: 'none',
-              color: '#fff',
-            }}
-          >
-            <div
-              style={{
-                fontSize: '13px',
-                opacity: 0.9,
-                marginBottom: 4,
-              }}
-            >
-              客人入口
-            </div>
-            <div
-              style={{
-                fontSize: '18px',
-                fontWeight: 600,
-                marginBottom: 4,
-              }}
-            >
-              我要在线预约理发
-            </div>
-            <div
-              style={{
-                fontSize: '12px',
-                opacity: 0.8,
-              }}
-            >
-              选择理发师 · 选择项目 · 选择时间格，一键提交预约
-            </div>
-          </Link>
+          <section className="grid gap-4 md:grid-cols-2">
+            {ENTRIES.map((item) => (
+              <Link
+                key={item.href}
+                href={item.href}
+                className="group rounded-2xl border border-neutral-800 bg-neutral-900/70 p-5 transition hover:border-neutral-300"
+              >
+                <div className="text-xs uppercase tracking-[0.2em] text-neutral-500">{item.tag}</div>
+                <div className="mt-2 text-2xl font-semibold group-hover:text-white">
+                  {item.title}
+                </div>
+                <div className="mt-2 text-sm text-neutral-400">{item.desc}</div>
+                <div className="mt-4 inline-flex items-center gap-2 text-xs text-neutral-300">
+                  进入控制台
+                  <span className="transition group-hover:translate-x-1">→</span>
+                </div>
+              </Link>
+            ))}
+          </section>
 
-          {/* 老板入口 */}
-          <Link
-            href="/admin/bookings"
-            style={{
-              display: 'block',
-              padding: '16px 18px',
-              borderRadius: 14,
-              border: '1px solid rgba(255,255,255,0.2)',
-              backgroundColor: '#111',
-              textDecoration: 'none',
-              color: '#fff',
-            }}
-          >
-            <div
-              style={{
-                fontSize: '13px',
-                opacity: 0.9,
-                marginBottom: 4,
-              }}
-            >
-              老板 / 店长入口
+          <section className="mt-10 grid gap-4 md:grid-cols-3">
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
+              <div className="text-xs text-neutral-400">核心能力</div>
+              <div className="mt-3 text-sm text-neutral-300">
+                预约、排班、收入与支付闭环，实时运营回路。
+              </div>
             </div>
-            <div
-              style={{
-                fontSize: '18px',
-                fontWeight: 600,
-                marginBottom: 4,
-              }}
-            >
-              查看今日预约 & 实收统计
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
+              <div className="text-xs text-neutral-400">多角色协同</div>
+              <div className="mt-3 text-sm text-neutral-300">
+                店主看经营，理发师看工单，客户看预约，平台看全局。
+              </div>
             </div>
-            <div
-              style={{
-                fontSize: '12px',
-                opacity: 0.8,
-              }}
-            >
-              按日期和理发师筛选，查看预约状态、本日营收、本理发师实收
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/60 p-4">
+              <div className="text-xs text-neutral-400">部署与运维</div>
+              <div className="mt-3 text-sm text-neutral-300">
+                ECS 部署脚本已就绪，支持零停机部署与回滚。
+              </div>
             </div>
-          </Link>
-        </section>
+          </section>
 
-        {/* 底部说明 */}
-        <footer
-          style={{
-            fontSize: '11px',
-            opacity: 0.6,
-            lineHeight: 1.6,
-          }}
-        >
-          当前版本：BarberFlow 1.0（店内自用测试版）。
-          仅支持单门店、无登录权限控制。
-          后续 2.0 将接入微信小程序、支持更多门店和账号体系。
-        </footer>
+          <footer className="mt-12 text-xs text-neutral-500">
+            当前版本：BarberFlow OS · H5 合集入口。建议移动端访问体验更佳。
+          </footer>
+        </div>
       </div>
     </main>
   )

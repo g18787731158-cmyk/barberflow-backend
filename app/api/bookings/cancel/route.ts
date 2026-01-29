@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
+import { STATUS_CANCEL, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -29,7 +30,7 @@ function parsePosInt(v: unknown): number | null {
 
 /**
  * 规则：
- * - 取消 = status: CANCELLED（双 L，统一口径）
+ * - 取消 = status: STATUS_CANCEL（统一口径）
  * - 释放时段 = slotLock: NULL（不是 false）
  * - 幂等：重复取消直接返回 ok，并确保 slotLock 已释放、completedAt=null
  */
@@ -50,8 +51,8 @@ export async function POST(req: NextRequest) {
 
       if (!b) return { kind: 'notfound' as const }
 
-      const st = String(b.status || '').toUpperCase()
-      const isCancelled = st === 'CANCELLED' || st === 'CANCELED'
+      const st = canonStatus(b.status)
+      const isCancelled = st === STATUS_CANCEL
 
       if (isCancelled) {
         const patch: any = {}
@@ -62,13 +63,13 @@ export async function POST(req: NextRequest) {
           await tx.booking.update({ where: { id }, data: patch, select: { id: true } })
         }
 
-        return { kind: 'ok' as const, id, status: 'CANCELLED', slotLock: false }
+        return { kind: 'ok' as const, id, status: STATUS_CANCEL, slotLock: false }
       }
 
       const updated = await tx.booking.update({
         where: { id },
         data: {
-          status: 'CANCELLED',
+          status: STATUS_CANCEL,
           slotLock: null,
           completedAt: null,
         },

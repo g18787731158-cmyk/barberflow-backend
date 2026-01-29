@@ -1,60 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/auth/admin'
+import {
+  startOfBizDayUtc,
+  endOfBizDayUtc,
+  startOfBizWeekUtc,
+  endOfBizWeekUtc,
+  startOfBizMonthUtc,
+  endOfBizMonthUtc,
+  parseClientTimeToUtcDate,
+} from '@/lib/tz'
 
 export const runtime = 'nodejs'
 
 type Range = 'day' | 'week' | 'month'
 
-const CN_OFFSET_MS = 8 * 60 * 60 * 1000
-const DAY_MS = 24 * 60 * 60 * 1000
-
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
-}
-
-function cnMidnightMs(dateStr: string) {
-  const d = new Date(`${dateStr}T00:00:00+08:00`)
-  const ms = d.getTime()
-  return Number.isNaN(ms) ? null : ms
-}
-
-function cnGetYMDFromMs(ms: number) {
-  const x = new Date(ms + CN_OFFSET_MS)
-  return {
-    y: x.getUTCFullYear(),
-    m: x.getUTCMonth() + 1,
-    d: x.getUTCDate(),
-  }
-}
-
-function cnDayOfWeekFromMs(ms: number) {
-  const x = new Date(ms + CN_OFFSET_MS)
-  return x.getUTCDay() // 0(日)~6(六)
-}
-
-function rangeStartEndCN(dateStr: string, range: Range) {
-  const baseMs = cnMidnightMs(dateStr)
-  if (baseMs === null) return null
-
+function rangeStartEndBiz(dateStr: string, range: Range) {
   if (range === 'day') {
-    return { start: new Date(baseMs), end: new Date(baseMs + DAY_MS) }
+    return { start: startOfBizDayUtc(dateStr), end: endOfBizDayUtc(dateStr) }
   }
-
   if (range === 'week') {
-    const dow = cnDayOfWeekFromMs(baseMs) // 0=周日
-    const diffToMon = dow === 0 ? -6 : 1 - dow
-    const weekStartMs = baseMs + diffToMon * DAY_MS
-    const weekEndMs = weekStartMs + 7 * DAY_MS
-    return { start: new Date(weekStartMs), end: new Date(weekEndMs) }
+    return { start: startOfBizWeekUtc(dateStr), end: endOfBizWeekUtc(dateStr) }
   }
-
-  const { y, m } = cnGetYMDFromMs(baseMs)
-  const monthStart = new Date(`${y}-${pad2(m)}-01T00:00:00+08:00`).getTime()
-  const nextM = m === 12 ? 1 : m + 1
-  const nextY = m === 12 ? y + 1 : y
-  const monthEnd = new Date(`${nextY}-${pad2(nextM)}-01T00:00:00+08:00`).getTime()
-  return { start: new Date(monthStart), end: new Date(monthEnd) }
+  return { start: startOfBizMonthUtc(dateStr), end: endOfBizMonthUtc(dateStr) }
 }
 
 export async function GET(req: NextRequest) {
@@ -73,10 +41,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: '缺少 date（YYYY-MM-DD）' }, { status: 400 })
     }
 
-    const r = rangeStartEndCN(dateStr, range)
-    if (!r) {
+    if (!parseClientTimeToUtcDate(dateStr)) {
       return NextResponse.json({ error: 'date 格式不正确（YYYY-MM-DD）' }, { status: 400 })
     }
+    const r = rangeStartEndBiz(dateStr, range)
 
     const where: any = {
       startTime: { gte: r.start, lt: r.end },

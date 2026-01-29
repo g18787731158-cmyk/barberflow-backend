@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { canonStatus, STATUS, type CanonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'

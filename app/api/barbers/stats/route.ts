@@ -1,44 +1,19 @@
 // app/api/barbers/stats/route.ts
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
+import { STATUS } from '@/lib/status'
+import {
+  bizDateString,
+  startOfBizDayUtc,
+  endOfBizDayUtc,
+  startOfBizWeekUtc,
+  endOfBizWeekUtc,
+  startOfBizMonthUtc,
+  endOfBizMonthUtc,
+} from '@/lib/tz'
 
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
-
-function cnDateString(date = new Date()) {
-  try {
-    return new Intl.DateTimeFormat('sv-SE', {
-      timeZone: 'Asia/Shanghai',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-    }).format(date)
-  } catch {
-    const ms = date.getTime() + 8 * 60 * 60 * 1000
-    return new Date(ms).toISOString().slice(0, 10)
-  }
-}
-
-function dayStartCN(d: string) {
-  return new Date(`${d}T00:00:00.000+08:00`)
-}
-
-function addDays(date: Date, days: number) {
-  const x = new Date(date)
-  x.setDate(x.getDate() + days)
-  return x
-}
-
-function monthStartCN(d: string) {
-  const [y, m] = d.split('-')
-  return new Date(`${y}-${m}-01T00:00:00.000+08:00`)
-}
-
-function addMonths(date: Date, months: number) {
-  const x = new Date(date)
-  x.setMonth(x.getMonth() + months)
-  return x
-}
 
 function amountOf(b: { price: any; payAmount: any }) {
   return Number(b.payAmount ?? b.price ?? 0)
@@ -51,24 +26,21 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'barberId is required' }, { status: 400 })
   }
 
-  const d = cnDateString()
-  const startToday = dayStartCN(d)
-  const endToday = addDays(startToday, 1)
+  const d = bizDateString()
+  const startToday = startOfBizDayUtc(d)
+  const endToday = endOfBizDayUtc(d)
 
-  // 周一为一周开始
-  const dow = startToday.getDay() // 0 Sun ... 6 Sat
-  const diffToMon = (dow + 6) % 7
-  const startWeek = addDays(startToday, -diffToMon)
-  const endWeek = addDays(startWeek, 7)
+  const startWeek = startOfBizWeekUtc(d)
+  const endWeek = endOfBizWeekUtc(d)
 
-  const startMonth = monthStartCN(d)
-  const endMonth = addMonths(startMonth, 1)
+  const startMonth = startOfBizMonthUtc(d)
+  const endMonth = endOfBizMonthUtc(d)
 
   // 今日完成
   const todayCompleted = await prisma.booking.findMany({
     where: {
       barberId,
-      status: 'COMPLETED',
+      status: STATUS.COMPLETED,
       startTime: { gte: startToday, lt: endToday },
     },
     select: { price: true, payAmount: true },
@@ -78,7 +50,7 @@ export async function GET(request: Request) {
   const weekCompleted = await prisma.booking.findMany({
     where: {
       barberId,
-      status: 'COMPLETED',
+      status: STATUS.COMPLETED,
       startTime: { gte: startWeek, lt: endWeek },
     },
     select: { price: true, payAmount: true },
@@ -88,7 +60,7 @@ export async function GET(request: Request) {
   const monthCompleted = await prisma.booking.findMany({
     where: {
       barberId,
-      status: 'COMPLETED',
+      status: STATUS.COMPLETED,
       startTime: { gte: startMonth, lt: endMonth },
     },
     select: { price: true, payAmount: true },
@@ -96,7 +68,7 @@ export async function GET(request: Request) {
 
   // 累计完成（不限制日期）
   const totalCompleted = await prisma.booking.findMany({
-    where: { barberId, status: 'COMPLETED' },
+    where: { barberId, status: STATUS.COMPLETED },
     select: { price: true, payAmount: true },
   })
 

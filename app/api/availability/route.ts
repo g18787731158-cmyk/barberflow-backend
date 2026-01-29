@@ -1,28 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
+import { STATUS_CANCEL } from '@/lib/status'
+import {
+  startOfBizDayUtc,
+  endOfBizDayUtc,
+  parseClientTimeToUtcDate,
+  utcDateToBizHHmm,
+} from '@/lib/tz'
 
 export const runtime = 'nodejs'
 
 const SLOT_MINUTES = 30
-const CN_OFFSET_MS = 8 * 60 * 60 * 1000
-
-function cnDayRange(dateStr: string) {
-  // ✅ 强制按中国时区切天（+08:00）
-  const start = new Date(`${dateStr}T00:00:00+08:00`)
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
-  return { start, end }
-}
-
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
-}
-
-// ✅ 把 Date 转成中国本地 HH:mm（不依赖服务器时区）
-function toCN_HHMM(d: Date) {
-  const x = new Date(d.getTime() + CN_OFFSET_MS)
-  return `${pad2(x.getUTCHours())}:${pad2(x.getUTCMinutes())}`
-}
-
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url)
@@ -34,14 +22,19 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: '缺少参数 date 或 barberId' }, { status: 400 })
     }
 
-    const { start: dayStart, end: dayEnd } = cnDayRange(date)
+    if (!parseClientTimeToUtcDate(date)) {
+      return NextResponse.json({ error: 'date 格式不正确（YYYY-MM-DD）' }, { status: 400 })
+    }
+
+    const dayStart = startOfBizDayUtc(date)
+    const dayEnd = endOfBizDayUtc(date)
 
     const bookings = await prisma.booking.findMany({
       where: {
         barberId,
         startTime: { gte: dayStart, lt: dayEnd }, // ✅ lt 次日0点
         slotLock: true, // ✅ 取消后 slotLock=null，自然就不占位了
-        status: { notIn: ['CANCELLED', 'CANCELED', 'CANCELED', 'CANCELED', 'CANCELED'] as any },
+        status: { notIn: [STATUS_CANCEL] as any },
       },
       include: {
         service: { select: { durationMinutes: true } },
@@ -57,7 +50,7 @@ export async function GET(req: NextRequest) {
 
       for (let i = 0; i < blocks; i++) {
         const t = new Date(b.startTime.getTime() + i * SLOT_MINUTES * 60 * 1000)
-        occupied.add(toCN_HHMM(t))
+        occupied.add(utcDateToBizHHmm(t))
       }
     }
 

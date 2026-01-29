@@ -1,6 +1,6 @@
 // app/api/services/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 
 // GET /api/services
 // GET /api/services?barberId=1

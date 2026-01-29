@@ -1,13 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
-import { STATUS, canonStatus } from '@/lib/status'
+import { prisma } from '@/lib/prisma'
+import { STATUS, STATUS_CANCEL, canonStatus } from '@/lib/status'
+import { startOfBizDayUtc, endOfBizDayUtc, utcDateToBizISO } from '@/lib/tz'
 
 export const runtime = 'nodejs'
 
 export async function GET(_req: NextRequest) {
-  const now = new Date()
-  const startOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0)
-  const endOfDay = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
+  const startOfDay = startOfBizDayUtc()
+  const endOfDay = endOfBizDayUtc()
 
   const todays = await prisma.booking.findMany({
     where: {
@@ -38,7 +38,7 @@ export async function GET(_req: NextRequest) {
 
     if (st === STATUS.SCHEDULED) scheduled += 1
     else if (st === STATUS.COMPLETED) completed += 1
-    else if (st === STATUS.CANCELED) cancelled += 1
+    else if (st === STATUS_CANCEL) cancelled += 1
 
     const src = String(b.source || '').toLowerCase()
     if (src === 'miniapp') miniapp += 1
@@ -54,7 +54,7 @@ export async function GET(_req: NextRequest) {
   const effective = total - cancelled
 
   return NextResponse.json({
-    date: startOfDay.toISOString().slice(0, 10),
+    date: utcDateToBizISO(startOfDay)?.slice(0, 10),
     total,
     scheduled,
     completed,

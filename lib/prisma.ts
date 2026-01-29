@@ -1,14 +1,17 @@
-// lib/prisma.ts
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from "@prisma/client";
 
-const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient };
 
-const prisma =
+export const prisma =
   globalForPrisma.prisma ??
   new PrismaClient({
-    log: ['error', 'warn'],
-  })
+    log: ["error", "warn"],
+  });
 
-if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = prisma
+if (process.env.NODE_ENV !== "production") {
+  globalForPrisma.prisma = prisma;
+}
 
-export default prisma
+export default prisma;
+export type { Prisma, PrismaClient } from "@prisma/client";
+export type PrismaTx = import("@prisma/client").Prisma.TransactionClient;

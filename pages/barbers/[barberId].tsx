@@ -1,7 +1,7 @@
 import { useRouter } from 'next/router';
 import Link from 'next/link';
 import { useState } from 'react';
-import prisma from '../../lib/prisma';
+import { prisma } from '../../lib/prisma';
 
 type BookingItem = {
   id: number;

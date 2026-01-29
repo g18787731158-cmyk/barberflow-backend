@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
+import { STATUS, canonStatus } from '@/lib/status'
 
 export const runtime = 'nodejs'
 
@@ -29,7 +30,7 @@ function parsePosInt(v: unknown): number | null {
 
 /**
  * 规则：
- * - 完成 = status: COMPLETED
+ * - 完成 = status: COMPLETED（统一口径）
  * - 释放时段 = slotLock: NULL（不是 false）
  * - 幂等：重复完成直接返回 ok，并确保 slotLock 已释放、completedAt 有值
  */
@@ -50,7 +51,7 @@ export async function POST(req: NextRequest) {
 
       if (!b) return { kind: 'notfound' as const }
 
-      const isCompleted = String(b.status || '').toUpperCase() === 'COMPLETED'
+      const isCompleted = canonStatus(b.status) === STATUS.COMPLETED
 
       // ✅ 幂等：已完成也要保证 slotLock=null + completedAt 有值
       if (isCompleted) {
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
         return {
           kind: 'ok' as const,
           id,
-          status: 'COMPLETED',
+          status: STATUS.COMPLETED,
           slotLock: false,
           completedAt: completedAt ? completedAt.toISOString() : null,
           alreadyCompleted: true,
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
       const updated = await tx.booking.update({
         where: { id },
         data: {
-          status: 'COMPLETED',
+          status: STATUS.COMPLETED,
           completedAt: now,
           slotLock: null,
         },

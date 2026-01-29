@@ -1,6 +1,7 @@
 import type { NextApiRequest, NextApiResponse } from 'next';
-import prisma from '../../../lib/prisma';
+import { prisma } from '../../../lib/prisma';
 import { requireAdminPages } from '@/lib/auth/admin-pages';
+import { toBookingStatus } from '@/lib/status';
 
 type Data =
   | { success: true; booking: any }
@@ -32,8 +33,8 @@ export default async function handler(
         .json({ success: false, message: '无效的预约 ID' });
     }
 
-    const allowed = ['scheduled', 'completed', 'cancelled'];
-    if (!status || !allowed.includes(status)) {
+    const normalized = toBookingStatus(status);
+    if (!normalized) {
       return res
         .status(400)
         .json({ success: false, message: '无效的预约状态' });
@@ -41,7 +42,7 @@ export default async function handler(
 
     const booking = await prisma.booking.update({
       where: { id: idNum },
-      data: { status },
+      data: { status: normalized },
     });
 
     return res.status(200).json({ success: true, booking });

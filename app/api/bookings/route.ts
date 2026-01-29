@@ -1,50 +1,25 @@
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
-import type { Prisma } from '@prisma/client'
+import { prisma } from '@/lib/prisma'
+import type { Prisma } from '@/lib/prisma'
+import { STATUS, STATUS_CANCEL } from '@/lib/status'
+import {
+  startOfBizDayUtc,
+  endOfBizDayUtc,
+  parseClientTimeToUtcDate,
+  bizDateString,
+} from '@/lib/tz'
 
 export const runtime = 'nodejs'
 
 type Tx = Prisma.TransactionClient
 
-const CN_OFFSET_MS = 8 * 60 * 60 * 1000
 const SLOT_MINUTES = 30
 
 function addMinutes(date: Date, minutes: number) {
   return new Date(date.getTime() + minutes * 60 * 1000)
 }
 
-function pad2(n: number) {
-  return String(n).padStart(2, '0')
-}
-
-// ✅ 把任意 Date 按中国时区取 YYYY-MM-DD（不依赖服务器时区）
-function dateToYMD_CN(d: Date) {
-  const x = new Date(d.getTime() + CN_OFFSET_MS)
-  return `${x.getUTCFullYear()}-${pad2(x.getUTCMonth() + 1)}-${pad2(x.getUTCDate())}`
-}
-
-// ✅ 统一按中国日切范围
-function cnDayRange(dateStr: string) {
-  const start = new Date(`${dateStr}T00:00:00+08:00`)
-  const end = new Date(start.getTime() + 24 * 60 * 60 * 1000)
-  return { start, end }
-}
-
-// ✅ 兜底：没带时区就当中国时间 +08:00
-function parseStartTimeCN(input: string) {
-  const s = String(input ?? '').trim()
-  if (!s) return new Date('invalid')
-
-  // 已带 Z 或 ±HH:mm 的，直接解析
-  if (/[zZ]$|[+\-]\d{2}:\d{2}$/.test(s)) return new Date(s)
-
-  // 允许 "YYYY-MM-DDTHH:mm" / "YYYY-MM-DDTHH:mm:ss" / "YYYY-MM-DD HH:mm:ss"
-  const isoLike = s.includes('T') ? s : s.replace(' ', 'T')
-  const withSeconds =
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(isoLike) ? `${isoLike}:00` : isoLike
-
-  return new Date(`${withSeconds}+08:00`)
-}
+// ✅ 兜底：没带时区就当中国时间 +08:00（由 tz 统一处理）
 
 async function calcFinalPrice(tx: Tx, barberId: number, serviceId: number) {
   const bs = await tx.barberservice.findUnique({
@@ -82,7 +57,14 @@ export async function GET(req: NextRequest) {
     const where: any = {}
 
     if (date) {
-      const { start, end } = cnDayRange(date)
+      if (!parseClientTimeToUtcDate(date)) {
+        return NextResponse.json(
+          { success: false, message: 'date 格式不正确' },
+          { status: 400 },
+        )
+      }
+      const start = startOfBizDayUtc(date)
+      const end = endOfBizDayUtc(date)
       where.startTime = { gte: start, lt: end }
     }
     if (shopId) where.shopId = Number(shopId)
@@ -133,8 +115,8 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ success: false, message: '缺少必要字段' }, { status: 400 })
     }
 
-    const start = parseStartTimeCN(startTime)
-    if (Number.isNaN(start.getTime())) {
+    const start = parseClientTimeToUtcDate(startTime)
+    if (!start) {
       // ✅ 护栏 2：把收到的 startTime 原样回给你，方便定位前端哪里变形了
       return NextResponse.json(
         { success: false, message: 'startTime 格式不正确', got: startTime },
@@ -154,7 +136,7 @@ export async function POST(req: NextRequest) {
     }
 
     // ✅ 锁按中国日期切
-    const dateStrCN = dateToYMD_CN(start)
+    const dateStrCN = bizDateString(start)
     const lockKey = `bf:barber:${barberIdNum}:${dateStrCN}`
 
     const result = await prisma.$transaction(async (tx) => {
@@ -165,7 +147,8 @@ export async function POST(req: NextRequest) {
       if (got !== 1) return { kind: 'busy' as const }
 
       try {
-        const { start: dayStart, end: dayEnd } = cnDayRange(dateStrCN)
+        const dayStart = startOfBizDayUtc(dateStrCN)
+        const dayEnd = endOfBizDayUtc(dateStrCN)
 
         const duration = await getServiceDuration(tx, serviceIdNum)
         const newEnd = addMinutes(start, duration)
@@ -176,7 +159,7 @@ export async function POST(req: NextRequest) {
             startTime: { gte: dayStart, lt: dayEnd },
             slotLock: true,
             // ✅ 同时兼容两种拼法（你项目里两个都出现过）
-            status: { notIn: ['CANCELLED', 'CANCELED'] as any },
+            status: { notIn: [STATUS_CANCEL] as any },
           },
           include: { service: { select: { durationMinutes: true } } },
           orderBy: { startTime: 'asc' },
@@ -200,7 +183,7 @@ export async function POST(req: NextRequest) {
             phone: phone ? String(phone) : null,
             startTime: start,
             source: source || 'web',
-            status: 'SCHEDULED',
+            status: STATUS.SCHEDULED,
             slotLock: true,
             price: finalPrice,
           },

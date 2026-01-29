@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/auth/admin'
+import { STATUS, canonStatus } from '@/lib/status'
 
 function floorInt(n: number) {
   return Math.floor(n)
@@ -35,10 +36,10 @@ export async function POST(req: Request) {
       }
 
       // 1) 完成：保证 COMPLETED + completedAt
-      if (booking.status !== 'COMPLETED') {
+      if (canonStatus(booking.status) !== STATUS.COMPLETED) {
         await tx.booking.update({
           where: { id: bookingId },
-          data: { status: 'COMPLETED', completedAt: new Date() },
+          data: { status: STATUS.COMPLETED, completedAt: new Date() },
         })
       } else if (!booking.completedAt) {
         await tx.booking.update({

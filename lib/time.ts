@@ -1,31 +1,35 @@
-// lib/time.ts
+// ✅ 纯工具：不要 import prisma / service / db
 
-/** 把 yyyy-MM-dd 这样的日期字符串，转换成北京当天的开始和结束时间 */
-export function getDayRangeInBeijing(dateStr: string) {
-  // dateStr 形如 "2025-11-25"
-  const [year, month, day] = dateStr.split('-').map(Number)
-
-  // 北京时间 = UTC+8，这里我们直接用本地时区来构造
-  const start = new Date(year, month - 1, day, 0, 0, 0)
-  const end = new Date(year, month - 1, day + 1, 0, 0, 0)
-
-  return { start, end }
-}
-// lib/prisma.ts
-import { PrismaClient } from '@prisma/client'
-
-const globalForPrisma = globalThis as unknown as {
-  prisma?: PrismaClient
+export function now() {
+  return new Date()
 }
 
-const prisma =
-  globalForPrisma.prisma ??
-  new PrismaClient({
-    log: ['query', 'error', 'warn'],
-  })
-
-if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = prisma
+export function isoNow() {
+  return new Date().toISOString()
 }
 
-export default prisma
+export function toDate(input: string | number | Date) {
+  return input instanceof Date ? input : new Date(input)
+}
+
+export function startOfDay(d: Date) {
+  const x = new Date(d)
+  x.setHours(0, 0, 0, 0)
+  return x
+}
+
+export function endOfDay(d: Date) {
+  const x = new Date(d)
+  x.setHours(23, 59, 59, 999)
+  return x
+}
+
+export function addMinutes(d: Date, minutes: number) {
+  return new Date(d.getTime() + minutes * 60 * 1000)
+}
+
+export function clampToMinute(d: Date) {
+  const x = new Date(d)
+  x.setSeconds(0, 0)
+  return x
+}

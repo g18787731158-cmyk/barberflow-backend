@@ -1,7 +1,8 @@
 // app/api/admin/timeoff/route.ts
 import { NextRequest, NextResponse } from 'next/server'
-import prisma from '@/lib/prisma'
+import { prisma } from '@/lib/prisma'
 import { requireAdmin } from '@/lib/auth/admin'
+import { parseClientTimeToUtcDate, startOfBizDayUtc, addBizDays } from '@/lib/tz'
 
 export const runtime = 'nodejs'
 
@@ -46,9 +47,7 @@ function parseBool(v: unknown): boolean | null {
 }
 
 function parseDateTime(v: unknown): Date | null {
-  if (typeof v !== 'string') return null
-  const d = new Date(v)
-  return Number.isNaN(d.getTime()) ? null : d
+  return parseClientTimeToUtcDate(v)
 }
 
 function parseHHMM(v: unknown): { h: number; m: number } | null {
@@ -66,23 +65,13 @@ function minutesOfDay(h: number, m: number) {
   return h * 60 + m
 }
 
-// yyyy-mm-dd => Date(当天 00:00:00, 服务器时区)
+// yyyy-mm-dd => Date(当天 00:00:00, Asia/Shanghai)
 function parseYMD(v: unknown): Date | null {
   if (typeof v !== 'string') return null
   const s = v.trim()
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s)
-  if (!m) return null
-  const y = Number(m[1])
-  const mo = Number(m[2])
-  const d = Number(m[3])
-  const dt = new Date(y, mo - 1, d, 0, 0, 0)
-  return Number.isNaN(dt.getTime()) ? null : dt
-}
-
-function addDays(date: Date, days: number) {
-  const d = new Date(date)
-  d.setDate(d.getDate() + days)
-  return d
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(s)) return null
+  const parsed = parseClientTimeToUtcDate(s)
+  return parsed ? startOfBizDayUtc(s) : null
 }
 
 /**
@@ -153,8 +142,9 @@ export async function POST(req: NextRequest) {
           )
         }
         startAt = sd
-        // endDate 是“最后一天”，所以 endAt = endDate + 1 天 00:00
-        endAt = addDays(ed, 1)
+        // endDate 是“最后一天”，所以 endAt = endDate + 1 天 00:00（Asia/Shanghai）
+        const endDateStr = addBizDays(body.endDate as string, 1)
+        endAt = startOfBizDayUtc(endDateStr)
       }
 
       if (startAt >= endAt) {
@@ -175,11 +165,14 @@ export async function POST(req: NextRequest) {
             { status: 400 },
           )
         }
-        startAt = new Date(date)
-        startAt.setHours(st.h, st.m, 0, 0)
-
-        endAt = new Date(date)
-        endAt.setHours(et.h, et.m, 0, 0)
+        startAt = parseClientTimeToUtcDate(`${body.date}T${String(st.h).padStart(2, '0')}:${String(st.m).padStart(2, '0')}:00`)
+        endAt = parseClientTimeToUtcDate(`${body.date}T${String(et.h).padStart(2, '0')}:${String(et.m).padStart(2, '0')}:00`)
+        if (!startAt || !endAt) {
+          return NextResponse.json(
+            { ok: false, error: 'Invalid date/time format' },
+            { status: 400 },
+          )
+        }
       }
 
       if (startAt >= endAt) {
